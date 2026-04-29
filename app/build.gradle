@@ -128,8 +128,7 @@ dependencies {
     // Password-protected ZIP
     implementation 'net.lingala.zip4j:zip4j:2.11.5'
 
-    // SLF4J Android binding — satisfies the slf4j-api dependency pulled in by
-    // jcifs-ng and jsch; without this R8 fails on missing StaticLoggerBinder
+    // SLF4J Android binding
     implementation 'org.slf4j:slf4j-android:1.7.36'
 
     // Biometric authentication (App Lock + Vault)
@@ -138,13 +137,13 @@ dependencies {
     // Encrypted SharedPreferences (AppLockManager PIN storage)
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
-    // ExifInterface (EXIF Viewer — zero new transitive deps)
+    // ExifInterface (EXIF Viewer)
     implementation 'androidx.exifinterface:exifinterface:1.3.7'
 
     // SlidingPaneLayout (Dual-Pane view)
     implementation 'androidx.slidingpanelayout:slidingpanelayout:1.2.0'
 
-    // Markwon (Markdown preview — richer than regex renderer)
+    // Markwon (Markdown preview)
     implementation 'io.noties.markwon:core:4.6.2'
 
     // Palette (extract dominant color from images)
@@ -156,18 +155,13 @@ dependencies {
     // ViewPager2
     implementation 'androidx.viewpager2:viewpager2:1.0.0'
 
-    // ID3 tag writing (mp3agic — pure-Java, no native code)
+    // ID3 tag writing (mp3agic)
     implementation 'com.mpatric:mp3agic:0.9.1'
 
-    // QR code generation (ZXing core, no Activities needed)
+    // QR code generation (ZXing core)
     implementation 'com.google.zxing:core:3.5.2'
 
-    // ── Google Drive REST API removed ─────────────────────────────────────
-    // Cloud storage is now accessed exclusively through Android's Storage
-    // Access Framework (SAF) via CloudStorageFragment. No API key, OAuth
-    // client ID, or Google Play Services auth dependency is required.
-
-    // Chromecast / Google Cast (MediaRouteButton pulled as transitive dep)
+    // Chromecast / Google Cast
     implementation 'com.google.android.gms:play-services-cast-framework:21.5.0'
 
     // Testing

@@ -38,6 +38,18 @@
         android:textColor="?attr/colorError"
         android:visibility="gone" />
 
+    <!-- Album art (audio only; hidden for video) -->
+    <ImageView
+        android:id="@+id/ivAlbumArt"
+        android:layout_width="128dp"
+        android:layout_height="128dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="4dp"
+        android:scaleType="centerCrop"
+        android:src="@drawable/ic_file_audio"
+        android:visibility="gone" />
+
     <!-- Now-playing title -->
     <TextView
         android:id="@+id/tvNowPlaying"

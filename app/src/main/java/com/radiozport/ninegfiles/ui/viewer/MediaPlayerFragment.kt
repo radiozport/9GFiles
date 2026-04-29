@@ -1,5 +1,7 @@
 package com.radiozport.ninegfiles.ui.viewer
 
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
@@ -10,6 +12,10 @@ import android.widget.Toast
 import androidx.core.os.bundleOf
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
@@ -179,6 +185,7 @@ class MediaPlayerFragment : Fragment() {
             // Set up a single persistent surface callback — replaced on track change.
             attachSurfaceCallback()
         } else {
+            loadTrackMetadata()
             preparePlayer(null, autoPlay = false)
         }
     }
@@ -246,6 +253,7 @@ class MediaPlayerFragment : Fragment() {
     private fun switchTrack(autoPlay: Boolean) {
         releasePlayer()
         updateQueueUi()
+        loadTrackMetadata()
         if (currentPath.isEmpty()) return
         if (isVideo) {
             attachSurfaceCallback()   // surface may already exist; callback fires immediately
@@ -267,6 +275,63 @@ class MediaPlayerFragment : Fragment() {
         binding.btnNext.isVisible = multi
         binding.btnPrevious.alpha = if (currentIndex > 0) 1f else 0.35f
         binding.btnNext.alpha = if (currentIndex < queue.size - 1) 1f else 0.35f
+    }
+
+    // ── Metadata / album art ──────────────────────────────────────────────────
+
+    /**
+     * Asynchronously extract embedded album art (and fall back to a generic
+     * audio icon) for the track at [currentIndex].  Must be called after
+     * [currentIndex] has been updated.  Safe to call on the main thread.
+     *
+     * The stale-path guard (`capturedPath != currentPath`) ensures that a slow
+     * IO result from a previously-playing track never overwrites art that was
+     * already loaded for a newer track.
+     */
+    private fun loadTrackMetadata() {
+        if (_binding == null) return
+        // Album art is only meaningful for audio; video shows its own surface.
+        if (isVideo) {
+            binding.ivAlbumArt.isVisible = false
+            return
+        }
+
+        val capturedPath = currentPath
+        if (capturedPath.isEmpty()) {
+            binding.ivAlbumArt.isVisible = false
+            return
+        }
+
+        // Show placeholder immediately so there is never stale art visible
+        // while the IO is in-flight.
+        binding.ivAlbumArt.setImageResource(com.radiozport.ninegfiles.R.drawable.ic_file_audio)
+        binding.ivAlbumArt.isVisible = true
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            val artBytes: ByteArray? = withContext(Dispatchers.IO) {
+                try {
+                    MediaMetadataRetriever().run {
+                        setDataSource(capturedPath)
+                        val bytes = embeddedPicture
+                        release()
+                        bytes
+                    }
+                } catch (_: Exception) { null }
+            }
+
+            // Discard result if the view was destroyed or the user already
+            // skipped to a different track while we were loading.
+            if (_binding == null || currentPath != capturedPath) return@launch
+
+            if (artBytes != null) {
+                val bitmap = BitmapFactory.decodeByteArray(artBytes, 0, artBytes.size)
+                if (bitmap != null) {
+                    binding.ivAlbumArt.setImageBitmap(bitmap)
+                    return@launch
+                }
+            }
+            // No embedded art — placeholder is already set; nothing more to do.
+        }
     }
 
     // ── Local player ──────────────────────────────────────────────────────────

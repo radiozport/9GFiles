@@ -111,6 +111,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupBottomNav() {
+        // setupWithNavController keeps the visual tab indicator in sync with the
+        // current destination and enables multi-back-stack save/restore for
+        // non-home tabs. We then override the item-selected listener below to
+        // fix the Home button behaviour.
         binding.bottomNav.setupWithNavController(navController)
         binding.navigationView.setupWithNavController(navController)
 
@@ -123,6 +127,30 @@ class MainActivity : AppCompatActivity() {
                 .findViewById<android.widget.TextView>(R.id.tvNavVersion)
                 ?.text = "v$versionName"
         } catch (_: Exception) { }
+
+        // Override item-selected so the Home tab ALWAYS pops the entire back
+        // stack back to homeFragment, no matter how deep navigation went.
+        // Without this override, fragments opened via a raw navigate() call
+        // (e.g. quick-access Downloads button) bypass the NavigationUI
+        // save/restore mechanism, causing the default handler to silently
+        // re-navigate to explorerFragment instead of going back to Home.
+        binding.bottomNav.setOnItemSelectedListener { item ->
+            if (item.itemId == R.id.homeFragment) {
+                // Pop everything above homeFragment (the start destination).
+                // Returns false only if homeFragment is not in the stack, which
+                // should never happen — the navigate() fallback is a safety net.
+                val popped = navController.popBackStack(R.id.homeFragment, false)
+                if (!popped) {
+                    navController.navigate(R.id.homeFragment)
+                }
+                true
+            } else {
+                // All other tabs use the standard NavigationUI logic which
+                // correctly handles multi-back-stack save/restore.
+                NavigationUI.onNavDestinationSelected(item, navController)
+            }
+        }
+
         navController.addOnDestinationChangedListener { _, destination, _ ->
             val showBottom = destination.id in listOf(
                 R.id.homeFragment, R.id.explorerFragment, R.id.searchFragment,

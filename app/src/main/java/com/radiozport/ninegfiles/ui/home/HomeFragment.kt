@@ -283,7 +283,10 @@ class HomeFragment : Fragment() {
         quickPaths.forEach { (button, path) ->
             button.setOnClickListener {
                 viewModel.navigate(path)
-                findNavController().navigate(R.id.explorerFragment)
+                // Use the named action (not the raw destination ID) so that the
+                // correct back-stack entry is created — pressing Home will then
+                // pop back to homeFragment as expected.
+                findNavController().navigate(R.id.action_home_to_explorer)
             }
         }
     }
@@ -347,7 +350,7 @@ class HomeFragment : Fragment() {
             onClick  = {
                 val root = Environment.getExternalStorageDirectory().absolutePath
                 viewModel.navigate(root)
-                findNavController().navigate(R.id.explorerFragment)
+                findNavController().navigate(R.id.action_home_to_explorer)
             }
         ))
 
@@ -384,7 +387,7 @@ class HomeFragment : Fragment() {
                 bgTint   = bgTint,
                 onClick  = {
                     viewModel.navigate(volPath)
-                    findNavController().navigate(R.id.explorerFragment)
+                    findNavController().navigate(R.id.action_home_to_explorer)
                 }
             ))
         }
