@@ -348,6 +348,29 @@
             <com.google.android.material.switchmaterial.SwitchMaterial android:id="@+id/switchShowThumbnails" android:layout_width="wrap_content" android:layout_height="wrap_content" android:checked="true" />
         </LinearLayout>
 
+        <!-- Show file type icons -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:paddingStart="20dp" android:paddingEnd="16dp"
+            android:paddingTop="4dp" android:paddingBottom="4dp">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="File Type Icons"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    android:textColor="?attr/colorOnSurface" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Colour-coded icons per file type, album art for audio, real icons for APKs"
+                    android:textAppearance="?attr/textAppearanceBodySmall"
+                    android:textColor="?attr/colorOnSurfaceVariant" />
+            </LinearLayout>
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switchShowFileTypeIcons"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+        </LinearLayout>
+
         <!-- Date format row -->
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
             android:orientation="horizontal" android:gravity="center_vertical"

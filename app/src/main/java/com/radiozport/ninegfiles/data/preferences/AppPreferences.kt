@@ -55,6 +55,7 @@ class AppPreferences(private val context: Context) {
         val KEY_DATE_FORMAT            = stringPreferencesKey("date_format")            // short | medium | iso
         val KEY_REMEMBER_LAST_PATH     = booleanPreferencesKey("remember_last_path")    // default true
         val KEY_SHOW_THUMBNAILS        = booleanPreferencesKey("show_thumbnails")        // default true
+        val KEY_SHOW_FILE_TYPE_ICONS   = booleanPreferencesKey("show_file_type_icons")   // default true
     }
 
     val sortOption: Flow<SortOption> = context.dataStore.data.map { prefs ->
@@ -272,8 +273,13 @@ class AppPreferences(private val context: Context) {
     val showThumbnails: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[KEY_SHOW_THUMBNAILS] ?: true
     }
+    val showFileTypeIcons: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_SHOW_FILE_TYPE_ICONS] ?: true
+    }
+
     suspend fun setTrashAutoCleanDays(days: Int) { context.dataStore.edit { it[KEY_TRASH_AUTO_CLEAN_DAYS] = days } }
     suspend fun setDateFormat(format: String) { context.dataStore.edit { it[KEY_DATE_FORMAT] = format } }
     suspend fun setRememberLastPath(remember: Boolean) { context.dataStore.edit { it[KEY_REMEMBER_LAST_PATH] = remember } }
     suspend fun setShowThumbnails(show: Boolean) { context.dataStore.edit { it[KEY_SHOW_THUMBNAILS] = show } }
+    suspend fun setShowFileTypeIcons(show: Boolean) { context.dataStore.edit { it[KEY_SHOW_FILE_TYPE_ICONS] = show } }
 }

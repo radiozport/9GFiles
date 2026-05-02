@@ -2,6 +2,10 @@ package com.radiozport.ninegfiles.ui.adapters
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.provider.MediaStore
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -54,6 +58,16 @@ class FileAdapter(
         }
 
     /**
+     * When true, file type icons are displayed with category-colour tinting
+     * and album-art / APK icons are loaded for audio and APK files.
+     * Matches the "File Type Icons" preference in Settings.
+     */
+    var showFileTypeIcons: Boolean = true
+        set(value) {
+            if (field != value) { field = value; notifyDataSetChanged() }
+        }
+
+    /**
      * When false, file extensions are stripped from display names.
      * Matches the "Show Extensions" preference in Settings.
      */
@@ -86,7 +100,6 @@ class FileAdapter(
         set(value) {
             val old = field
             field = value
-            // Efficiently notify only changed items
             currentList.forEachIndexed { index, item ->
                 val wasSelected = item.path in old
                 val isSelected = item.path in value
@@ -168,15 +181,13 @@ class FileAdapter(
             binding.tvDate.text = formatDate(item.lastModified)
             binding.tvSize.visibility = if (showFileInfo && !item.isDirectory) View.VISIBLE else View.GONE
             binding.tvDate.visibility = if (showFileInfo) View.VISIBLE else View.GONE
-            loadThumbnail(binding.root.context, item, binding.ivIcon)
+            loadFileIcon(binding.root.context, item, binding.ivIcon, binding.iconContainer)
             updateSelection(isSelected)
             binding.ivBookmark.visibility = if (item.isBookmarked) View.VISIBLE else View.GONE
             binding.noteDot?.visibility = if (item.hasNote) View.VISIBLE else View.GONE
 
-            // Apply density: adjust the ConstraintLayout min-height inside the CardView
             val density = binding.root.context.resources.displayMetrics.density
             val minHeightPx = (rowMinHeightDp() * density).toInt()
-            // The ConstraintLayout is the direct child of the CardView
             (binding.root.getChildAt(0) as? android.view.View)?.minimumHeight = minHeightPx
         }
 
@@ -202,7 +213,7 @@ class FileAdapter(
             binding.tvName.text = displayName(item)
             binding.tvSize.text = item.formattedSize
             binding.tvSize.visibility = if (showFileInfo && !item.isDirectory) View.VISIBLE else View.GONE
-            loadThumbnail(binding.root.context, item, binding.ivThumbnail)
+            loadFileIcon(binding.root.context, item, binding.ivThumbnail, binding.thumbnailContainer)
             updateSelection(isSelected)
         }
 
@@ -224,7 +235,7 @@ class FileAdapter(
 
         fun bind(item: FileItem, isSelected: Boolean) {
             binding.tvName.text = displayName(item)
-            loadThumbnail(binding.root.context, item, binding.ivIcon)
+            loadFileIcon(binding.root.context, item, binding.ivIcon, null)
             updateSelection(isSelected)
         }
 
@@ -234,67 +245,196 @@ class FileAdapter(
         }
     }
 
-    // ─── Thumbnail Loading ────────────────────────────────────────────────
+    // ─── Icon & Thumbnail Loading ─────────────────────────────────────────
 
-    private fun loadThumbnail(context: Context, item: FileItem, imageView: android.widget.ImageView) {
-        when {
-            !showThumbnails || item.fileType !in listOf(FileType.IMAGE, FileType.VIDEO, FileType.APK) -> {
-                imageView.setImageResource(getIconForType(item.fileType))
-                Glide.with(context).clear(imageView)
+    /**
+     * Central icon/thumbnail loader.
+     *
+     * Priority:
+     *   1. If [showThumbnails] is true: load a real preview (image, video frame,
+     *      audio album art, or APK package icon).
+     *   2. Otherwise fall back to the static vector icon for the file type.
+     *
+     * If [showFileTypeIcons] is true the vector icon is tinted with the
+     * category colour and the [container] (when provided) gets a matching
+     * low-alpha rounded background — giving every file type a distinctive look.
+     */
+    private fun loadFileIcon(
+        context: Context,
+        item: FileItem,
+        imageView: android.widget.ImageView,
+        container: View?
+    ) {
+        val type = item.fileType
+
+        // ── Container background (type-colour pill) ───────────────────────
+        if (container != null) {
+            if (showFileTypeIcons) {
+                val categoryColor = ContextCompat.getColor(context, type.colorRes)
+                container.background = buildColoredBackground(categoryColor, context)
+            } else {
+                container.setBackgroundResource(R.drawable.bg_icon_rounded)
             }
-            item.fileType == FileType.IMAGE -> {
-                Glide.with(context)
-                    .load(item.file)
-                    .apply(
-                        RequestOptions()
-                            .placeholder(R.drawable.ic_file_image)
-                            .error(R.drawable.ic_file_image)
-                            .diskCacheStrategy(DiskCacheStrategy.ALL)
-                            .override(300, 300)
-                            .centerCrop()
-                    )
-                    .into(imageView)
+        }
+
+        // ── Try to load a real preview when thumbnails are enabled ────────
+        if (showThumbnails) {
+            when (type) {
+                FileType.IMAGE -> {
+                    imageView.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    imageView.setPadding(0, 0, 0, 0)
+                    imageView.imageTintList = null
+                    Glide.with(context)
+                        .load(item.file)
+                        .apply(
+                            RequestOptions()
+                                .placeholder(R.drawable.ic_file_image)
+                                .error(R.drawable.ic_file_image)
+                                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                                .override(300, 300)
+                                .centerCrop()
+                        )
+                        .into(imageView)
+                    return
+                }
+                FileType.VIDEO -> {
+                    imageView.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    imageView.setPadding(0, 0, 0, 0)
+                    imageView.imageTintList = null
+                    Glide.with(context)
+                        .load(item.file)
+                        .apply(
+                            RequestOptions()
+                                .placeholder(R.drawable.ic_file_video)
+                                .error(R.drawable.ic_file_video)
+                                .diskCacheStrategy(DiskCacheStrategy.ALL)
+                                .override(300, 300)
+                                .centerCrop()
+                                .frame(1_000_000L)
+                        )
+                        .into(imageView)
+                    return
+                }
+                FileType.AUDIO -> {
+                    val albumArtUri = resolveAudioAlbumArt(context, item.path)
+                    if (albumArtUri != null) {
+                        imageView.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                        imageView.setPadding(0, 0, 0, 0)
+                        imageView.imageTintList = null
+                        Glide.with(context)
+                            .load(albumArtUri)
+                            .apply(
+                                RequestOptions()
+                                    .placeholder(R.drawable.ic_file_audio)
+                                    .error(R.drawable.ic_file_audio)
+                                    .diskCacheStrategy(DiskCacheStrategy.ALL)
+                                    .override(300, 300)
+                                    .centerCrop()
+                            )
+                            .into(imageView)
+                        return
+                    }
+                    // fall through to static icon if no album art found
+                }
+                FileType.APK -> {
+                    val apkDrawable = extractApkIcon(context, item.path)
+                    if (apkDrawable != null) {
+                        imageView.scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+                        val padPx = (12 * context.resources.displayMetrics.density).toInt()
+                        imageView.setPadding(padPx, padPx, padPx, padPx)
+                        imageView.imageTintList = null
+                        Glide.with(context).clear(imageView)
+                        imageView.setImageDrawable(apkDrawable)
+                        return
+                    }
+                    // fall through to static icon if extraction fails
+                }
+                else -> { /* fall through */ }
             }
-            item.fileType == FileType.VIDEO -> {
-                Glide.with(context)
-                    .load(item.file)
-                    .apply(
-                        RequestOptions()
-                            .placeholder(R.drawable.ic_file_video)
-                            .error(R.drawable.ic_file_video)
-                            .diskCacheStrategy(DiskCacheStrategy.ALL)
-                            .override(300, 300)
-                            .centerCrop()
-                            .frame(1_000_000L)
-                    )
-                    .into(imageView)
-            }
-            item.fileType == FileType.APK -> {
-                Glide.with(context)
-                    .load(item.file)
-                    .apply(RequestOptions().placeholder(R.drawable.ic_file_apk).error(R.drawable.ic_file_apk))
-                    .into(imageView)
-            }
-            else -> {
-                imageView.setImageResource(getIconForType(item.fileType))
-                Glide.with(context).clear(imageView)
-            }
+        }
+
+        // ── Static / fallback icon ────────────────────────────────────────
+        Glide.with(context).clear(imageView)
+        imageView.scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        val padPx = (8 * context.resources.displayMetrics.density).toInt()
+        imageView.setPadding(padPx, padPx, padPx, padPx)
+        imageView.setImageResource(getIconForType(type))
+
+        // Apply category colour tint to the vector icon when showFileTypeIcons=true
+        if (showFileTypeIcons) {
+            val color = ContextCompat.getColor(context, type.colorRes)
+            imageView.imageTintList = ColorStateList.valueOf(color)
+        } else {
+            imageView.imageTintList = null
         }
     }
 
+    /**
+     * Builds a rounded rectangle drawable tinted with [color] at ~15 % opacity —
+     * used as the icon container background when file-type icons are enabled.
+     */
+    private fun buildColoredBackground(color: Int, context: Context): GradientDrawable {
+        val alphaBg = (color and 0x00FFFFFF) or 0x26000000   // 15 % alpha
+        val radiusPx = 10f * context.resources.displayMetrics.density
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(alphaBg)
+            cornerRadius = radiusPx
+        }
+    }
+
+    /**
+     * Queries MediaStore for the album-art URI of the given audio file path.
+     * Returns null when not indexed or permissions are absent.
+     */
+    private fun resolveAudioAlbumArt(context: Context, path: String): Uri? = try {
+        val projection = arrayOf(MediaStore.Audio.Media.ALBUM_ID)
+        val selection  = "${MediaStore.Audio.Media.DATA} = ?"
+        context.contentResolver.query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            projection, selection, arrayOf(path), null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val albumId = cursor.getLong(
+                    cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+                )
+                android.content.ContentUris.withAppendedId(
+                    Uri.parse("content://media/external/audio/albumart"),
+                    albumId
+                )
+            } else null
+        }
+    } catch (e: Exception) { null }
+
+    /**
+     * Uses [android.content.pm.PackageManager] to extract the launcher icon from
+     * an uninstalled APK at [apkPath].  Returns null on failure so the caller
+     * can fall back to the static APK vector.
+     */
+    private fun extractApkIcon(context: Context, apkPath: String): android.graphics.drawable.Drawable? = try {
+        val pm = context.packageManager
+        @Suppress("DEPRECATION")
+        val info = pm.getPackageArchiveInfo(apkPath, 0)
+        info?.applicationInfo?.let { appInfo ->
+            appInfo.sourceDir       = apkPath
+            appInfo.publicSourceDir = apkPath
+            appInfo.loadIcon(pm)
+        }
+    } catch (e: Exception) { null }
+
     private fun getIconForType(type: FileType): Int = when (type) {
-        FileType.FOLDER -> R.drawable.ic_folder
-        FileType.IMAGE -> R.drawable.ic_file_image
-        FileType.VIDEO -> R.drawable.ic_file_video
-        FileType.AUDIO -> R.drawable.ic_file_audio
-        FileType.DOCUMENT -> R.drawable.ic_file_document
-        FileType.PDF -> R.drawable.ic_file_pdf
-        FileType.ARCHIVE -> R.drawable.ic_file_archive
-        FileType.APK -> R.drawable.ic_file_apk
-        FileType.CODE -> R.drawable.ic_file_code
-        FileType.SPREADSHEET -> R.drawable.ic_file_spreadsheet
+        FileType.FOLDER       -> R.drawable.ic_folder
+        FileType.IMAGE        -> R.drawable.ic_file_image
+        FileType.VIDEO        -> R.drawable.ic_file_video
+        FileType.AUDIO        -> R.drawable.ic_file_audio
+        FileType.DOCUMENT     -> R.drawable.ic_file_document
+        FileType.PDF          -> R.drawable.ic_file_pdf
+        FileType.ARCHIVE      -> R.drawable.ic_file_archive
+        FileType.APK          -> R.drawable.ic_file_apk
+        FileType.CODE         -> R.drawable.ic_file_code
+        FileType.SPREADSHEET  -> R.drawable.ic_file_spreadsheet
         FileType.PRESENTATION -> R.drawable.ic_file_presentation
-        FileType.UNKNOWN -> R.drawable.ic_file_generic
+        FileType.UNKNOWN      -> R.drawable.ic_file_generic
     }
 
     private val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())

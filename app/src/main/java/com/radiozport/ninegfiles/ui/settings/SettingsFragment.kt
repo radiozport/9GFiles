@@ -87,6 +87,7 @@ class SettingsFragment : Fragment() {
             // ── New preferences ───────────────────────────────────────────────
             binding.switchRememberLastPath.isChecked = prefs.rememberLastPath.first()
             binding.switchShowThumbnails.isChecked   = prefs.showThumbnails.first()
+            binding.switchShowFileTypeIcons.isChecked = prefs.showFileTypeIcons.first()
 
             val trashDays = prefs.trashAutoCleanDays.first()
             binding.tvTrashAutoClean.text = if (trashDays == 0) "Never" else "$trashDays days"
@@ -180,6 +181,9 @@ class SettingsFragment : Fragment() {
         }
         binding.switchShowThumbnails.setOnCheckedChangeListener { _, c ->
             lifecycleScope.launch { prefs.setShowThumbnails(c) }
+        }
+        binding.switchShowFileTypeIcons.setOnCheckedChangeListener { _, c ->
+            lifecycleScope.launch { prefs.setShowFileTypeIcons(c) }
         }
         binding.btnTrashAutoClean.setOnClickListener { showTrashAutoCleanDialog() }
         binding.btnDateFormat.setOnClickListener { showDateFormatDialog() }

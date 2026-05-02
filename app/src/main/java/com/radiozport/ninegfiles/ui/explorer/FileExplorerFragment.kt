@@ -416,6 +416,11 @@ class FileExplorerFragment : Fragment() {
                         fileAdapter.notifyDataSetChanged()
                     }
                 }
+                launch {
+                    viewModel.showFileTypeIcons.collectLatest { show ->
+                        fileAdapter.showFileTypeIcons = show
+                    }
+                }
             }
         }
     }

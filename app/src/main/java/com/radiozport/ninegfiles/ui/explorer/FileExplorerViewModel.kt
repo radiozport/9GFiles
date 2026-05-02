@@ -82,6 +82,7 @@ class FileExplorerViewModel(application: Application) : AndroidViewModel(applica
     val showFileInfo   = prefs.showFileInfo.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
     val showExtensions = prefs.showExtensions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
     val showThumbnails = prefs.showThumbnails.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
+    val showFileTypeIcons = prefs.showFileTypeIcons.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
     val keepPasteBar  = prefs.keepPasteBar.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), false)
 
     // ─── Selection ────────────────────────────────────────────────────────
