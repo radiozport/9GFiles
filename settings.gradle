@@ -10,6 +10,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url 'https://jitpack.io' }   // TableView (evrencoskun/TableView)
     }
 }
 rootProject.name = "9GFiles"

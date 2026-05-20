@@ -1,18 +1,21 @@
 package com.radiozport.ninegfiles.ui.main
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -23,6 +26,7 @@ import androidx.navigation.NavController
 import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.*
 import com.radiozport.ninegfiles.R
+import com.radiozport.ninegfiles.data.model.FileItem
 import com.radiozport.ninegfiles.data.model.OperationResult
 import com.radiozport.ninegfiles.databinding.ActivityMainBinding
 import com.radiozport.ninegfiles.ui.dialogs.BatchRenameDialog
@@ -30,11 +34,16 @@ import com.radiozport.ninegfiles.ui.explorer.FileExplorerViewModel
 import com.radiozport.ninegfiles.ui.explorer.FileExplorerViewModelFactory
 import com.radiozport.ninegfiles.utils.AppLockManager
 import com.radiozport.ninegfiles.utils.AppLockState
+import com.radiozport.ninegfiles.utils.FileUtils
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -424,14 +433,198 @@ class MainActivity : AppCompatActivity() {
             .setCancelable(false).show()
     }
 
+    // ─── Intent routing ───────────────────────────────────────────────────────
+
+    /**
+     * Called for the launch intent (onCreate) AND for new intents delivered while
+     * the activity is already running at the top of the stack (onNewIntent).
+     */
     private fun handleIncomingIntent(intent: Intent?) {
-        // Handle ACTION_OPEN_PATH from home screen shortcuts
-        if (intent?.action == "com.radiozport.ninegfiles.ACTION_OPEN_PATH") {
-            val path = intent.getStringExtra("open_path") ?: return
-            openPathInExplorer(path)
+        when (intent?.action) {
+            // Home-screen shortcut → open a specific folder in the explorer
+            "com.radiozport.ninegfiles.ACTION_OPEN_PATH" -> {
+                val path = intent.getStringExtra("open_path") ?: return
+                openPathInExplorer(path)
+            }
+            // System file-open request (e.g. Downloads notification, "Open with…" picker)
+            Intent.ACTION_VIEW, Intent.ACTION_OPEN_DOCUMENT -> {
+                val uri = intent.data ?: return
+                openViewIntent(uri, intent.type)
+            }
+            // Wi-Fi Direct / notification deep-link
+            else -> {
+                intent?.getStringExtra("navigate_to")?.let { path -> openPathInExplorer(path) }
+            }
         }
-        // Handle navigate_to from Wi-Fi Direct / other notification taps
-        intent?.getStringExtra("navigate_to")?.let { path -> openPathInExplorer(path) }
+    }
+
+    /**
+     * Receives new intents when the activity is already running with
+     * launchMode="singleTop".  Without this override the intent is swallowed
+     * and the file is never opened.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)   // keep getIntent() in sync for any later reads
+        handleIncomingIntent(intent)
+    }
+
+    /**
+     * Resolves the incoming [uri] to a local [File] (copying content:// streams
+     * to the app cache when necessary) then navigates to the appropriate viewer.
+     */
+    private fun openViewIntent(uri: Uri, mimeHint: String?) {
+        lifecycleScope.launch {
+            val file: File? = withContext(Dispatchers.IO) { resolveUriToFile(uri) }
+            if (file == null || !file.exists()) return@launch
+            dispatchToViewer(file)
+        }
+    }
+
+    /**
+     * Resolves a URI to a [File] the in-app viewers can access.
+     *
+     * * `file://` URIs → use the path directly.
+     * * `content://` URIs → copy to `[cacheDir]/intent_open/<displayName>`.
+     *
+     * Returns `null` if resolution fails.
+     */
+    private fun resolveUriToFile(uri: Uri): File? = try {
+        when (uri.scheme?.lowercase()) {
+            "file" -> uri.path?.let { File(it) }?.takeIf { it.exists() }
+            "content" -> {
+                // Recover the original display name so the extension is preserved.
+                val displayName = contentResolver.query(
+                    uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst())
+                        cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+                    else null
+                } ?: uri.lastPathSegment ?: "unknown_file"
+
+                val cacheFile = File(cacheDir, "intent_open/${displayName}")
+                    .also { it.parentFile?.mkdirs() }
+
+                contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(cacheFile).use { output -> input.copyTo(output) }
+                }
+                cacheFile.takeIf { it.exists() }
+            }
+            else -> null
+        }
+    } catch (_: Exception) { null }
+
+    /**
+     * Navigates to the right in-app viewer for [file], waiting for [homeFragment]
+     * to be the current destination if the nav graph hasn't settled yet.
+     */
+    private fun dispatchToViewer(file: File) {
+        if (navController.currentDestination?.id == R.id.homeFragment) {
+            navigateToViewer(file)
+        } else {
+            // The nav graph is still initialising — wait for the start destination.
+            navController.addOnDestinationChangedListener(
+                object : NavController.OnDestinationChangedListener {
+                    override fun onDestinationChanged(
+                        controller: NavController,
+                        destination: androidx.navigation.NavDestination,
+                        arguments: Bundle?
+                    ) {
+                        if (destination.id == R.id.homeFragment) {
+                            controller.removeOnDestinationChangedListener(this)
+                            navigateToViewer(file)
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    /**
+     * Maps [file]'s extension to the correct in-app viewer and navigates to it.
+     * Falls back to a system `ACTION_VIEW` intent for unrecognised types.
+     */
+    private fun navigateToViewer(file: File) {
+        val ext  = file.extension.lowercase()
+        val path = file.absolutePath
+        val args = Bundle()
+
+        when (ext) {
+            // ── Images ───────────────────────────────────────────────────────
+            "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "svg" -> {
+                args.putString("path", path)
+                navController.navigate(R.id.imageViewerFragment, args)
+            }
+            // ── PDF ──────────────────────────────────────────────────────────
+            "pdf" -> {
+                args.putString("pdfPath", path)
+                navController.navigate(R.id.pdfViewerFragment, args)
+            }
+            // ── eBook ────────────────────────────────────────────────────────
+            "epub" -> {
+                args.putString("epubPath", path)
+                navController.navigate(R.id.epubReaderFragment, args)
+            }
+            // ── Word / OpenDocument text ──────────────────────────────────────
+            "docx", "doc", "odt" -> {
+                args.putString("docxPath", path)
+                navController.navigate(R.id.docxViewerFragment, args)
+            }
+            // ── RTF ──────────────────────────────────────────────────────────
+            "rtf" -> {
+                args.putString("rtfPath", path)
+                navController.navigate(R.id.rtfViewerFragment, args)
+            }
+            // ── Markdown ─────────────────────────────────────────────────────
+            "md", "markdown" -> {
+                args.putString("mdPath", path)
+                navController.navigate(R.id.markdownViewerFragment, args)
+            }
+            // ── Spreadsheets ──────────────────────────────────────────────────
+            "xlsx", "xlsm", "ods", "csv" -> {
+                args.putString("spreadsheetPath", path)
+                navController.navigate(R.id.spreadsheetViewerFragment, args)
+            }
+            // ── Presentations ─────────────────────────────────────────────────
+            "pptx" -> {
+                args.putString("pptxPath", path)
+                navController.navigate(R.id.presentationViewerFragment, args)
+            }
+            // ── Archives ─────────────────────────────────────────────────────
+            "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "tgz", "tbz2", "txz" -> {
+                args.putString("archivePath", path)
+                navController.navigate(R.id.zipBrowserFragment, args)
+            }
+            // ── APK ──────────────────────────────────────────────────────────
+            "apk" -> {
+                args.putString("apkPath", path)
+                navController.navigate(R.id.apkInfoFragment, args)
+            }
+            // ── Audio / Video ─────────────────────────────────────────────────
+            "mp3", "flac", "ogg", "wav", "aac", "opus", "wma", "m4a",
+            "mp4", "mkv", "avi", "mov", "webm", "3gp", "m4v", "wmv", "ts" -> {
+                args.putString("mediaPath", path)
+                navController.navigate(R.id.mediaInfoFragment, args)
+            }
+            // ── Text / code / everything else ─────────────────────────────────
+            else -> {
+                if (FileUtils.isTextFile(file)) {
+                    args.putString("filePath", path)
+                    navController.navigate(R.id.textEditorFragment, args)
+                } else {
+                    // Nothing in-app can show this type — hand off to the system.
+                    val item = FileItem.fromFile(file)
+                    try {
+                        val uri = FileProvider.getUriForFile(
+                            this, "$packageName.fileprovider", file)
+                        startActivity(Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, item.mimeType.ifEmpty { "*/*" })
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        })
+                    } catch (_: ActivityNotFoundException) { /* no handler — silently ignore */ }
+                }
+            }
+        }
     }
 
     private fun openPathInExplorer(path: String) {

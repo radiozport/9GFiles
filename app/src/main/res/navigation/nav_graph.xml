@@ -51,6 +51,9 @@
         <action android:id="@+id/action_home_to_docx_viewer" app:destination="@id/docxViewerFragment"
             app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
             app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+        <action android:id="@+id/action_home_to_rtf_viewer" app:destination="@id/rtfViewerFragment"
+            app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
         <action android:id="@+id/action_home_to_markdown_viewer" app:destination="@id/markdownViewerFragment"
             app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
             app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
@@ -60,6 +63,13 @@
         <action android:id="@+id/action_home_to_wifi_direct" app:destination="@id/wifiDirectFragment"
             app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
             app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+        <action android:id="@+id/action_home_to_spreadsheet_viewer" app:destination="@id/spreadsheetViewerFragment"
+            app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+        <action android:id="@+id/action_home_to_presentation_viewer" app:destination="@id/presentationViewerFragment"
+            app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+
     </fragment>
 
     <fragment android:id="@+id/explorerFragment"
@@ -81,6 +91,9 @@
             app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
             app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
         <action android:id="@+id/action_explorer_to_docx_viewer" app:destination="@id/docxViewerFragment"
+            app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+        <action android:id="@+id/action_explorer_to_rtf_viewer" app:destination="@id/rtfViewerFragment"
             app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
             app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
         <action android:id="@+id/action_explorer_to_markdown_viewer" app:destination="@id/markdownViewerFragment"
@@ -107,6 +120,13 @@
         <action android:id="@+id/action_explorer_to_wifi_direct" app:destination="@id/wifiDirectFragment"
             app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
             app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+        <action android:id="@+id/action_explorer_to_spreadsheet_viewer" app:destination="@id/spreadsheetViewerFragment"
+            app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+        <action android:id="@+id/action_explorer_to_presentation_viewer" app:destination="@id/presentationViewerFragment"
+            app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
+            app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+
     </fragment>
 
     <fragment android:id="@+id/searchFragment"
@@ -167,6 +187,12 @@
         android:name="com.radiozport.ninegfiles.ui.viewer.DocxViewerFragment"
         android:label="Document Viewer" tools:layout="@layout/fragment_docx_viewer">
         <argument android:name="docxPath" app:argType="string"/>
+    </fragment>
+
+    <fragment android:id="@+id/rtfViewerFragment"
+        android:name="com.radiozport.ninegfiles.ui.viewer.RtfViewerFragment"
+        android:label="RTF Viewer" tools:layout="@layout/fragment_rtf_viewer">
+        <argument android:name="rtfPath" app:argType="string"/>
     </fragment>
 
     <fragment android:id="@+id/markdownViewerFragment"
@@ -327,6 +353,19 @@
             app:destination="@id/epubReaderFragment"
             app:enterAnim="@anim/slide_in_right" app:exitAnim="@anim/slide_out_left"
             app:popEnterAnim="@anim/slide_in_left" app:popExitAnim="@anim/slide_out_right"/>
+    </fragment>
+
+
+    <fragment android:id="@+id/spreadsheetViewerFragment"
+        android:name="com.radiozport.ninegfiles.ui.viewer.SpreadsheetViewerFragment"
+        android:label="Spreadsheet Viewer" tools:layout="@layout/fragment_spreadsheet_viewer">
+        <argument android:name="spreadsheetPath" app:argType="string"/>
+    </fragment>
+
+    <fragment android:id="@+id/presentationViewerFragment"
+        android:name="com.radiozport.ninegfiles.ui.viewer.PresentationViewerFragment"
+        android:label="Presentation Viewer" tools:layout="@layout/fragment_presentation_viewer">
+        <argument android:name="pptxPath" app:argType="string"/>
     </fragment>
 
 </navigation>

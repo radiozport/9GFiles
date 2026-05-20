@@ -117,7 +117,9 @@ class TextEditorFragment : Fragment() {
                 }
                 originalContent = content
                 binding.editorContent.setText(content)
-                // Encrypted files are read-only (we don't write back to the .9genc container)
+                // Encrypted files open in read-only view by default; the user can
+                // still switch to Edit mode via the toolbar — saveFile() will
+                // re-encrypt back into the .9genc container on save.
                 binding.editorContent.isEnabled = !EncryptionUtils.isEncrypted(File(filePath))
                 binding.loadingIndicator.visibility = View.GONE
                 updateLineCount(content)
@@ -329,7 +331,41 @@ class TextEditorFragment : Fragment() {
         val newContent = binding.editorContent.text?.toString() ?: return
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                withContext(Dispatchers.IO) { File(filePath).writeText(newContent, Charsets.UTF_8) }
+                withContext(Dispatchers.IO) {
+                    val file = File(filePath)
+                    if (EncryptionUtils.isEncrypted(file)) {
+                        // The file is a .9genc device-key container. Re-encrypt the
+                        // edited plaintext back into the container using the device's
+                        // own public key. Writing raw text here would overwrite the
+                        // 9GEK magic header, making the file unreadable on next open.
+                        val publicKeyPem = DeviceKeyManager.getPublicKeyPem()
+                        val tempPlain = File.createTempFile("9gf_edit_", ".tmp", file.parentFile)
+                        val tempEnc   = File.createTempFile("9gf_enc_",  ".tmp", file.parentFile)
+                        try {
+                            tempPlain.writeText(newContent, Charsets.UTF_8)
+                            val result = EncryptionUtils.encryptForDevice(
+                                source                = tempPlain,
+                                dest                  = tempEnc,
+                                recipientPublicKeyPem = publicKeyPem
+                            )
+                            if (result is EncryptionUtils.EncryptResult.Failure) {
+                                throw Exception(result.reason)
+                            }
+                            // Atomically replace the original encrypted file.
+                            // renameTo is a single syscall on the same FS; fall back
+                            // to copy+delete if the rename crosses mount points.
+                            if (!tempEnc.renameTo(file)) {
+                                tempEnc.copyTo(file, overwrite = true)
+                                tempEnc.delete()
+                            }
+                        } finally {
+                            tempPlain.delete()
+                            tempEnc.delete() // no-op if already renamed away
+                        }
+                    } else {
+                        file.writeText(newContent, Charsets.UTF_8)
+                    }
+                }
                 originalContent = newContent
                 hasUnsavedChanges = false
                 Snackbar.make(binding.root, "Saved", Snackbar.LENGTH_SHORT).show()

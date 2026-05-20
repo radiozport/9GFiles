@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Thumbnail card shown in the horizontal strip below the header -->
+<com.google.android.material.card.MaterialCardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/thumbCard"
+    android:layout_width="96dp"
+    android:layout_height="60dp"
+    android:layout_marginEnd="6dp"
+    android:clickable="true"
+    android:focusable="true"
+    app:cardBackgroundColor="?attr/colorSurfaceVariant"
+    app:cardCornerRadius="8dp"
+    app:cardElevation="2dp"
+    app:strokeColor="?attr/colorPrimary"
+    app:strokeWidth="0dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="6dp">
+
+        <!-- Slide number badge -->
+        <TextView
+            android:id="@+id/tvThumbNum"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:textColor="?attr/colorPrimary"
+            android:text="1" />
+
+        <!-- Slide title preview (truncated) -->
+        <TextView
+            android:id="@+id/tvThumbTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="9sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:gravity="center"
+            android:paddingTop="2dp"
+            android:text="Slide title" />
+
+    </LinearLayout>
+
+</com.google.android.material.card.MaterialCardView>

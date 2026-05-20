@@ -12,7 +12,7 @@
     <LinearLayout android:id="@+id/topOverlay"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:background="#AA000000" android:orientation="horizontal"
-        android:gravity="center_vertical" android:paddingTop="32dp"
+        android:gravity="center_vertical" android:paddingTop="8dp"
         android:paddingStart="8dp" android:paddingEnd="8dp" android:paddingBottom="8dp">
 
         <ImageButton android:id="@+id/btnClose"
@@ -43,7 +43,7 @@
         android:layout_gravity="bottom"
         android:background="#AA000000" android:orientation="horizontal"
         android:gravity="center" android:padding="16dp"
-        android:paddingBottom="32dp">
+        android:paddingBottom="16dp">
 
         <ImageButton android:id="@+id/btnShare"
             android:layout_width="48dp" android:layout_height="48dp"

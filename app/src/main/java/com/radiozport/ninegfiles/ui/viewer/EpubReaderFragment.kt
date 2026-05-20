@@ -46,6 +46,9 @@ class EpubReaderFragment : Fragment() {
         fun newInstance(path: String) = EpubReaderFragment().apply {
             arguments = bundleOf(ARG_PATH to path)
         }
+
+        /** Zoom level applied / reversed by a double-tap (mirrors PdfZoomContainer). */
+        private const val EPUB_DOUBLE_TAP_SCALE = 2.5f
     }
 
     data class Chapter(val title: String, val entryName: String, val basePath: String)
@@ -84,6 +87,17 @@ class EpubReaderFragment : Fragment() {
     private var epubEntries:     Map<String, ByteArray>? = null
     private var epubTitle:       String = "eBook"
     private var chapterLoadJob:  Job? = null   // cancellable per-chapter load
+
+    // ── Double-tap zoom state ─────────────────────────────────────────────
+    /** True while the WebView is in the zoomed-in (2.5×) state. */
+    private var isEpubZoomed        = false
+    /**
+     * True from the moment [onDoubleTap] fires (ACTION_DOWN of the second tap)
+     * until the matching ACTION_UP is consumed.  Prevents the second tap's events
+     * from reaching the WebView so its own built-in double-tap zoom doesn't also
+     * fire, and suppresses the single-tap overlay toggle for that tap.
+     */
+    private var isHandlingDoubleTap = false
 
     // ---------- lifecycle -----------------------------------------------
 
@@ -229,22 +243,66 @@ class EpubReaderFragment : Fragment() {
             // fires reliably after the first render.  A GestureDetector wired to
             // setOnTouchListener intercepts the raw MotionEvent stream before the
             // WebView can swallow it, giving us a dependable single-tap signal.
+            //
+            // Double-tap zoom (2.5×) works by:
+            //  1. Detecting the double-tap in the GestureDetector (fires synchronously
+            //     on the second tap's ACTION_DOWN).
+            //  2. Calling webView.zoomBy() to apply / reverse the scale.
+            //  3. Consuming the second tap's DOWN + UP so the WebView never sees
+            //     them — preventing its own built-in double-tap zoom from also firing
+            //     and doubling the scale change.
+            val wv = this   // capture the WebView; 'webView' lateinit isn't assigned yet
             val tapDetector = GestureDetector(ctx,
                 object : GestureDetector.SimpleOnGestureListener() {
                     override fun onSingleTapUp(e: MotionEvent): Boolean {
+                        // Skip overlay toggle when this UP belongs to a double-tap.
+                        if (isHandlingDoubleTap) return false
                         if (isFullScreen) {
                             if (fsOverlay.visibility == View.VISIBLE) hideFullScreenOverlay()
                             else showFullScreenOverlay()
                         }
                         return false   // false = let the WebView still handle the tap normally
                     }
+
+                    override fun onDoubleTap(e: MotionEvent): Boolean {
+                        // Mark that we are handling this double-tap so the touch
+                        // listener can consume the second tap's remaining events.
+                        isHandlingDoubleTap = true
+                        if (isEpubZoomed) {
+                            wv.zoomBy(1f / EPUB_DOUBLE_TAP_SCALE)   // back to ~1×
+                            isEpubZoomed = false
+                        } else {
+                            wv.zoomBy(EPUB_DOUBLE_TAP_SCALE)          // zoom to 2.5×
+                            isEpubZoomed = true
+                        }
+                        return true
+                    }
                 })
             @Suppress("ClickableViewAccessibility")
-            setOnTouchListener { v, event ->
+            setOnTouchListener { _, event ->
+                // Snapshot the flag BEFORE feeding the event; onDoubleTap fires
+                // synchronously inside onTouchEvent and may flip the flag.
+                val wasHandlingDoubleTap = isHandlingDoubleTap
                 tapDetector.onTouchEvent(event)
-                // Return false so the WebView continues to receive and process
-                // the event (scrolling, link clicks, zoom, etc.)
-                false
+
+                when {
+                    // Second tap ACTION_DOWN: onDoubleTap just fired and set the
+                    // flag.  Consume so the WebView doesn't also process this as
+                    // the start of its own built-in double-tap zoom.
+                    isHandlingDoubleTap && !wasHandlingDoubleTap ->
+                        true
+
+                    // Second tap ACTION_UP: consume and reset the flag.
+                    wasHandlingDoubleTap &&
+                    event.actionMasked == MotionEvent.ACTION_UP -> {
+                        isHandlingDoubleTap = false
+                        true
+                    }
+
+                    // Everything else: pass through to WebView (scrolling, links,
+                    // pinch-to-zoom, first-tap overlay toggle, etc.).
+                    else -> false
+                }
             }
         }
 
@@ -503,6 +561,9 @@ class EpubReaderFragment : Fragment() {
     private fun showChapter(idx: Int) {
         currentIdx = idx
         chapterLoadJob?.cancel()
+
+        // A new chapter load resets the WebView's zoom level; keep our state in sync.
+        isEpubZoomed = false
 
         // Disable nav buttons while loading to prevent double-taps
         btnPrev.isEnabled = false

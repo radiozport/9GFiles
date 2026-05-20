@@ -29,6 +29,7 @@ import java.io.File
  * | `epub`                | [EpubReaderFragment]     (in-memory decrypt)  |
  * | `pdf`                 | [PdfViewerFragment]      (temp-file decrypt)  |
  * | `docx`, `doc`, `odt`  | [DocxViewerFragment]     (in-memory decrypt)  |
+ * | `rtf`                 | [RtfViewerFragment]      (in-memory decrypt)  |
  * | `md`                  | [MarkdownViewerFragment] (in-memory decrypt)  |
  * | `txt`, `html`, `xml`, | [TextEditorFragment]     (in-memory decrypt)  |
  * | `json`, `kt`, …       |                                               |
@@ -122,10 +123,22 @@ object FileOpener {
                     "docx", "doc", "odt" ->
                         navController.navigate(R.id.docxViewerFragment,
                             android.os.Bundle().apply { putString("docxPath", item.path) })
+                    // ── RTF: in-app viewer/editor ─────────────────────────────
+                    "rtf" ->
+                        navController.navigate(R.id.rtfViewerFragment,
+                            android.os.Bundle().apply { putString("rtfPath", item.path) })
                     // ── Markdown: dedicated renderer via Markwon ─────────────
                     "md" ->
                         navController.navigate(R.id.markdownViewerFragment,
                             android.os.Bundle().apply { putString("mdPath", item.path) })
+                    // ── Spreadsheets: in-app viewer ───────────────────────────
+                    "xlsx", "xlsm", "ods", "csv" ->
+                        navController.navigate(R.id.spreadsheetViewerFragment,
+                            android.os.Bundle().apply { putString("spreadsheetPath", item.path) })
+                    // ── Presentations: in-app viewer (pptx) / system (ppt, odp)
+                    "pptx" ->
+                        navController.navigate(R.id.presentationViewerFragment,
+                            android.os.Bundle().apply { putString("pptxPath", item.path) })
                     // ── Plain text / code ────────────────────────────────────
                     else ->
                         if (FileUtils.isTextFile(item.file))
@@ -182,10 +195,25 @@ object FileOpener {
                 navController.navigate(R.id.docxViewerFragment,
                     android.os.Bundle().apply { putString("docxPath", item.path) })
 
+            // ── RTF: in-app viewer/editor decrypts in-memory
+            innerExt == "rtf" ->
+                navController.navigate(R.id.rtfViewerFragment,
+                    android.os.Bundle().apply { putString("rtfPath", item.path) })
+
             // ── Markdown: dedicated Markwon renderer; decrypts in-memory
             innerExt == "md" ->
                 navController.navigate(R.id.markdownViewerFragment,
                     android.os.Bundle().apply { putString("mdPath", item.path) })
+
+            // ── Spreadsheets: in-app viewer decrypts in-memory
+            innerExt in setOf("xlsx", "xlsm", "ods", "csv") ->
+                navController.navigate(R.id.spreadsheetViewerFragment,
+                    android.os.Bundle().apply { putString("spreadsheetPath", item.path) })
+
+            // ── Presentations: in-app viewer decrypts in-memory
+            innerExt == "pptx" ->
+                navController.navigate(R.id.presentationViewerFragment,
+                    android.os.Bundle().apply { putString("pptxPath", item.path) })
 
             // ── Text-family: in-memory decrypt; TextEditorFragment handles it
             innerExt in setOf("txt","html","htm","xml","json","yaml","yml",

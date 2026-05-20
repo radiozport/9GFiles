@@ -143,6 +143,7 @@ object MimeTypeHelper {
         "pdf" -> "application/pdf"
         "doc" -> "application/msword"
         "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        "rtf" -> "application/rtf"
         "xls" -> "application/vnd.ms-excel"
         "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         "ppt" -> "application/vnd.ms-powerpoint"
@@ -153,6 +154,14 @@ object MimeTypeHelper {
         "tar" -> "application/x-tar"
         "gz" -> "application/gzip"
         "epub" -> "application/epub+zip"
+        "ods"  -> "application/vnd.oasis.opendocument.spreadsheet"
+        "ots"  -> "application/vnd.oasis.opendocument.spreadsheet-template"
+        "odp"  -> "application/vnd.oasis.opendocument.presentation"
+        "otp"  -> "application/vnd.oasis.opendocument.presentation-template"
+        "odt"  -> "application/vnd.oasis.opendocument.text"
+        "xlsm" -> "application/vnd.ms-excel.sheet.macroEnabled.12"
+        "csv"  -> "text/csv"
+        "tsv"  -> "text/tab-separated-values"
         // Encrypted containers: MIME reflects the encrypted wrapper, not the inner type.
         // The inner type is resolved at open-time via EncryptionUtils.innerExtension().
         "9genc" -> "application/octet-stream"

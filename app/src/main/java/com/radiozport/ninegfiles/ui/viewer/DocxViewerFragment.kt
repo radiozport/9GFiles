@@ -49,6 +49,12 @@ class DocxViewerFragment : Fragment() {
     private var _binding: FragmentDocxViewerBinding? = null
     private val binding get() = _binding!!
 
+    // Cached body HTML so the text-size toggle can re-render without re-parsing
+    private var bodyHtml: String = ""
+
+    // Text-size steps: index cycles Small→Medium→Large→XLarge on each button tap
+    private var textSizeStep: Int = 0  // 0=S 1=M 2=L 3=XL
+
     // ── Companion ────────────────────────────────────────────────────────────
 
     companion object {
@@ -90,6 +96,7 @@ class DocxViewerFragment : Fragment() {
             when {
                 result.isSuccess -> {
                     val (html, stats) = result.getOrThrow()
+                    bodyHtml = html
                     binding.tvDocInfo.text = stats
                     binding.webView.loadDataWithBaseURL(null, wrapHtml(html), "text/html", "UTF-8", null)
                     binding.webView.isVisible = true
@@ -99,6 +106,17 @@ class DocxViewerFragment : Fragment() {
         }
 
         binding.btnShare.setOnClickListener { shareFile(file) }
+
+        binding.btnTextSize.setOnClickListener {
+            if (bodyHtml.isEmpty()) return@setOnClickListener
+            textSizeStep = (textSizeStep + 1) % 4
+            binding.webView.loadDataWithBaseURL(
+                null, wrapHtml(bodyHtml), "text/html", "UTF-8", null)
+            val label = listOf("Small", "Medium", "Large", "X-Large")[textSizeStep]
+            com.google.android.material.snackbar.Snackbar
+                .make(binding.root, "Text size: $label", com.google.android.material.snackbar.Snackbar.LENGTH_SHORT)
+                .show()
+        }
     }
 
     override fun onDestroyView() {
@@ -424,7 +442,12 @@ class DocxViewerFragment : Fragment() {
      * Wraps the raw body HTML in a full document with theme-adaptive CSS.
      * Uses a dark-mode media query so the document respects the device theme.
      */
-    private fun wrapHtml(body: String): String = """
+    /** Font sizes (px) for the four text-size steps: S / M / L / XL */
+    private val TEXT_SIZES = listOf(12, 15, 18, 22)
+
+    private fun wrapHtml(body: String): String = wrapHtml(body, TEXT_SIZES[textSizeStep])
+
+    private fun wrapHtml(body: String, fontSizePx: Int): String = """
         <!DOCTYPE html>
         <html>
         <head>
@@ -464,7 +487,7 @@ class DocxViewerFragment : Fragment() {
             font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: var(--bg);
             color: var(--fg);
-            font-size: 15px;
+            font-size: ${fontSizePx}px;
             line-height: 1.75;
             padding: 20px 24px 48px;
             word-wrap: break-word;

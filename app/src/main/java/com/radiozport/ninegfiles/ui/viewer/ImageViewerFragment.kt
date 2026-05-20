@@ -9,7 +9,10 @@ import android.view.*
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.os.bundleOf
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
+import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.lifecycleScope
@@ -480,6 +483,29 @@ class ImageViewerFragment : Fragment() {
                 or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
             )
         }
+
+        // Apply window insets so overlays never collide with the system bars.
+        // The top overlay absorbs the status bar height; the bottom overlay absorbs
+        // the navigation bar height. Both keep their original padding on every other
+        // edge so icon spacing stays consistent regardless of device or nav mode.
+        val origTopPad = binding.topOverlay.paddingTop
+        val origBotPad = binding.bottomOverlay.paddingBottom
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.topOverlay) { v, insets ->
+            val statusBar = insets.getInsets(WindowInsetsCompat.Type.statusBars())
+            v.updatePadding(top = origTopPad + statusBar.top)
+            insets
+        }
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.bottomOverlay) { v, insets ->
+            val navBar = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            v.updatePadding(bottom = origBotPad + navBar.bottom)
+            insets
+        }
+
+        // Trigger an immediate insets dispatch so padding is correct on the first
+        // frame rather than after the next layout pass.
+        ViewCompat.requestApplyInsets(binding.root)
     }
 
     override fun onDestroyView() {

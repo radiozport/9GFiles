@@ -13,8 +13,8 @@ android {
         applicationId "com.radiozport.ninegfiles"
         minSdk 26
         targetSdk 35
-        versionCode 24
-        versionName "1.24"
+        versionCode 26
+        versionName "1.26"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables {
@@ -62,11 +62,17 @@ android {
             excludes += 'META-INF/LICENSE.txt'
             excludes += 'META-INF/NOTICE'
             excludes += 'META-INF/NOTICE.txt'
+
         }
     }
 }
 
 dependencies {
+    // Victor2018/DocViewer — renders pptx/docx/xls/pdf/txt/image via a bundled Activity.
+    // JitPack repo is already declared in settings.gradle (added for TableView).
+    // Use the latest commit on main; pin to a specific tag for reproducibility.
+    implementation 'com.github.Victor2018:DocViewer:3.0.8'
+
     // AndroidX Core
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -109,6 +115,10 @@ dependencies {
     // RecyclerView + DiffUtil
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
     implementation 'androidx.recyclerview:recyclerview-selection:1.1.0'
+
+    // TableView — native spreadsheet grid with frozen headers, row stripes, sort/filter
+    // Published on JitPack; old com.evrencoskun.library coord was JCenter (shut down).
+    implementation 'com.github.evrencoskun:TableView:v0.8.9.4'
 
     // Glide (image thumbnails)
     implementation 'com.github.bumptech.glide:glide:4.16.0'
@@ -164,6 +174,8 @@ dependencies {
 
     // QR code generation (ZXing core)
     implementation 'com.google.zxing:core:3.5.2'
+
+
 
     // AndroidSVG — renders inline SVG covers from XHTML ePub cover pages
     implementation 'com.caverock:androidsvg-aar:1.4'

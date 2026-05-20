@@ -164,3 +164,25 @@
 -keep class com.google.android.gms.cast.framework.** { *; }
 -keep class com.radiozport.ninegfiles.CastOptionsProvider { *; }
 -dontwarn com.google.android.gms.cast.**
+
+-dontwarn org.apache.logging.log4j.**
+
+# ── Victor2018/DocViewer ──────────────────────────────────────
+# DocViewer library package — keep Activity, enum beans, and all
+# internal classes so direct import calls survive R8 shrinking.
+-keep class com.cherry.lib.doc.** { *; }
+-dontwarn com.cherry.lib.doc.**
+# Apache POI (bundled in DocViewer) references Java Desktop classes
+# absent from Android. These code paths are never reached at runtime.
+-dontwarn java.awt.**
+-dontwarn javax.imageio.**
+-dontwarn javax.swing.**
+# Keep POI classes that DocViewer instantiates via reflection.
+-keep class org.apache.poi.** { *; }
+-dontwarn org.apache.poi.**
+
+# ── evrencoskun/TableView ─────────────────────────────────────
+# TableView uses reflection-based RecyclerView adapter internals;
+# keep the entire library so R8 doesn't strip ViewHolder methods.
+-keep class com.evrencoskun.tableview.** { *; }
+-dontwarn com.evrencoskun.tableview.**
