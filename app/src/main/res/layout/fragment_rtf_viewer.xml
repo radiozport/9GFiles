@@ -44,7 +44,6 @@
 
         </LinearLayout>
 
-        <!-- Text-size toggle button -->
         <ImageButton
             android:id="@+id/btnTextSize"
             android:layout_width="44dp"
@@ -54,7 +53,6 @@
             android:contentDescription="Toggle text size"
             app:tint="?attr/colorOnSurfaceVariant" />
 
-        <!-- Edit button: switches to edit mode (hidden while editing) -->
         <ImageButton
             android:id="@+id/btnEdit"
             android:layout_width="44dp"
@@ -64,7 +62,6 @@
             android:contentDescription="Edit document"
             app:tint="?attr/colorOnSurfaceVariant" />
 
-        <!-- Save button: commits edits to disk (visible only in edit mode) -->
         <ImageButton
             android:id="@+id/btnSave"
             android:layout_width="44dp"
@@ -75,7 +72,6 @@
             android:visibility="gone"
             app:tint="?attr/colorOnSurfaceVariant" />
 
-        <!-- Cancel / back-to-view button (visible only in edit mode) -->
         <ImageButton
             android:id="@+id/btnCancel"
             android:layout_width="44dp"
@@ -86,7 +82,6 @@
             android:visibility="gone"
             app:tint="?attr/colorOnSurfaceVariant" />
 
-        <!-- Share button: always visible -->
         <ImageButton
             android:id="@+id/btnShare"
             android:layout_width="44dp"
@@ -117,6 +112,103 @@
         android:textColor="?attr/colorError"
         android:visibility="gone" />
 
+    <!--
+        FORMATTING TOOLBAR — visible only while in edit mode.
+        Buttons: Bold · Italic · Underline · Strikethrough
+        Active state (when cursor is inside a run with that format) is indicated
+        by colourPrimary text + colourPrimaryContainer background, set in code.
+    -->
+    <HorizontalScrollView
+        android:id="@+id/formattingToolbar"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:fillViewport="false"
+        android:scrollbars="none"
+        android:background="?attr/colorSurfaceVariant"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp">
+
+            <!-- Bold -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnFmtBold"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:text="B"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                app:textAllCaps="false"
+                android:contentDescription="Bold" />
+
+            <!-- Italic -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnFmtItalic"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:text="I"
+                android:textSize="16sp"
+                android:textStyle="italic"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                app:textAllCaps="false"
+                android:contentDescription="Italic" />
+
+            <!-- Underline — text span applied in code so the U appears underlined -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnFmtUnderline"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:text="U"
+                android:textSize="16sp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                app:textAllCaps="false"
+                android:contentDescription="Underline" />
+
+            <!-- Strikethrough — text span applied in code -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnFmtStrike"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:text="S"
+                android:textSize="16sp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                app:textAllCaps="false"
+                android:contentDescription="Strikethrough" />
+
+            <!-- Divider -->
+            <View
+                android:layout_width="1dp"
+                android:layout_height="24dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:background="?attr/colorOutlineVariant" />
+
+        </LinearLayout>
+
+    </HorizontalScrollView>
+
     <!-- VIEW MODE: RTF rendered as HTML in a WebView -->
     <WebView
         android:id="@+id/webView"
@@ -125,19 +217,26 @@
         android:layout_weight="1"
         android:visibility="gone" />
 
-    <!-- EDIT MODE: plain-text content in a scrollable EditText -->
-    <ScrollView
+    <!--
+        EDIT MODE: rich-text content in an EditText that scrolls itself.
+        Using a plain FrameLayout instead of ScrollView is intentional:
+        wrapping a multiline EditText in a ScrollView creates nested-scroll
+        conflicts — the ScrollView intercepts touch events before they reach
+        the EditText, so scrolling within the editor stalls and every tap
+        requires two touches to register.  With FrameLayout the EditText
+        manages its own vertical scrolling via android:scrollbars.
+    -->
+    <FrameLayout
         android:id="@+id/scrollEditor"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:fillViewport="true"
         android:visibility="gone">
 
         <EditText
             android:id="@+id/etEditor"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:padding="16dp"
             android:gravity="top|start"
             android:textSize="15sp"
@@ -147,8 +246,11 @@
             android:textColor="?attr/colorOnSurface"
             android:textCursorDrawable="@null"
             android:hint="Start typing…"
-            android:textColorHint="?attr/colorOnSurfaceVariant" />
+            android:textColorHint="?attr/colorOnSurfaceVariant"
+            android:scrollbars="vertical"
+            android:overScrollMode="never"
+            android:nestedScrollingEnabled="false" />
 
-    </ScrollView>
+    </FrameLayout>
 
 </LinearLayout>

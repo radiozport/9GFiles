@@ -7,7 +7,7 @@
 
 [![Version](https://img.shields.io/badge/Version-1.26-blue?style=for-the-badge)](#)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-brightgreen?style=for-the-badge&logo=android)](#)
-[![License](https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge)](#)
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 [![API](https://img.shields.io/badge/API-26%2B-orange?style=for-the-badge)](#)
 
 *A powerful file manager that gives you complete control over everything on your phone — without the clutter, limits, or compromises of stock apps.*
@@ -350,7 +350,8 @@ When you open the app for the first time it will ask for storage access. On Andr
 
 **9G Files** by RadioZport  
 Copyright © R.N.K 9G5AR RadioZport  
-Version 1.26
+Version 1.26  
+Released under the [MIT License](LICENSE)
 
 ---
 

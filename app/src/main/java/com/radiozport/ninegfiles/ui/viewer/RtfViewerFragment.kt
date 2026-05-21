@@ -1,17 +1,35 @@
 package com.radiozport.ninegfiles.ui.viewer
 
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.SpannableStringBuilder
 import android.text.TextWatcher
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StrikethroughSpan
+import android.text.style.StyleSpan
+import android.text.style.SubscriptSpan
+import android.text.style.SuperscriptSpan
+import android.text.style.UnderlineSpan
 import android.view.*
 import android.webkit.WebSettings
 import android.webkit.WebViewClient
+import android.widget.TextView
 import androidx.core.content.FileProvider
 import androidx.core.os.bundleOf
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.radiozport.ninegfiles.databinding.FragmentRtfViewerBinding
@@ -31,58 +49,70 @@ import java.io.IOException
  * converts it to semantic HTML that is rendered in a [WebView] with a
  * theme-adaptive CSS sheet.
  *
- * Supported RTF features:
- *  - Character formatting: bold, italic, underline, strikethrough, superscript,
- *    subscript, font-size, foreground colour (via `\colortbl` table), highlight
- *  - Paragraph formatting: alignment (left/centre/right/justify), left indent,
- *    paragraph style (heading 1–6 via named style groups)
- *  - Unicode escapes (`\uN?`) and ANSI hex escapes (`\'XX`)
- *  - Smart quotes, em-dash, en-dash, bullet, non-breaking space/hyphen
- *  - Page breaks rendered as `<hr class='page-break'>`
- *  - Tables (`\trowd` / `\cell` / `\row`)
- *  - Groups flagged with `\*` are silently skipped
- *
  * ## Editing
- * Tapping the pencil icon in the header switches to **edit mode**, which
- * displays the plain text extracted from the document in a full-screen
- * [EditText].  On save the text is serialised back into a minimal but
- * spec-compliant RTF 1.9 document and written to disk.  A dirty-state guard
- * prompts the user before discarding unsaved changes.
+ * Tapping the pencil icon switches to **edit mode**.  The RTF is parsed a
+ * second time into a [SpannableStringBuilder] so that bold, italic, underline,
+ * strikethrough, colours, and font-size changes are visible as real text
+ * formatting inside the [android.widget.EditText] — no control codes are ever
+ * shown to the user.  A compact formatting toolbar (B / I / U / S̶) appears
+ * above the editor; tapping a button while text is selected toggles that
+ * attribute over the selection.  On save, [serializeSpannableToRtf] walks all
+ * span transition points and re-emits a spec-compliant RTF 1.9 document with
+ * every character attribute preserved.
  *
  * ## Encrypted files
- * `.rtf.9genc` files encrypted with the device key are decrypted in-memory
- * before parsing.  Password-encrypted files surface an error asking the user
- * to decrypt via the Secure Vault first.
+ * `.rtf.9genc` files encrypted with the device key are decrypted in-memory.
+ * Password-encrypted files surface an error asking the user to decrypt via the
+ * Secure Vault first.
  */
 class RtfViewerFragment : Fragment() {
 
     private var _binding: FragmentRtfViewerBinding? = null
     private val binding get() = _binding!!
 
-    // Loaded document state
-    private var currentFile: File? = null
-    private var extractedPlainText: String = ""
-    // Raw RTF bytes decoded as ISO-8859-1 — used as the edit buffer so that
-    // saving writes back the original markup rather than re-serialised plain text.
-    private var rawRtfSource: String = ""
-    private var isEditMode = false
-    private var isDirty = false
+    // ── Document state ────────────────────────────────────────────────────────
 
-    // Cached rendered HTML body so the text-size toggle re-renders without re-parsing
+    private var currentFile: File? = null
+    private var isEditMode = false
+    private var isDirty    = false
+
+    // Debounce handler: toolbar state is refreshed at most once per 150 ms so that
+    // rapid keystrokes don't queue up expensive getSpans() + setBackgroundColor()
+    // calls on the main thread for every character typed.
+    private val toolbarHandler  = Handler(Looper.getMainLooper())
+    private val toolbarRunnable = Runnable { updateToolbarState() }
+
+    /** Cached HTML body for the WebView (view mode). */
     private var bodyHtml: String = ""
 
-    // Text-size steps: S / M / L / XL — starts at Medium (index 1)
+    /**
+     * Live rich-text edit buffer.  Populated by [parseRtfToSpannable] at load
+     * time and handed to the [android.widget.EditText] when edit mode opens.
+     * Formatting spans applied by the toolbar are stored directly in this SSB
+     * so that [serializeSpannableToRtf] can read them back on save.
+     */
+    private var editableContent: SpannableStringBuilder = SpannableStringBuilder()
+
+    /** Text-size steps: S / M / L / XL — starts at Medium (index 1). */
     private var textSizeStep: Int = 1  // 0=S 1=M 2=L 3=XL
 
-    // ── Companion ────────────────────────────────────────────────────────────
+    // ── Companion ─────────────────────────────────────────────────────────────
 
     companion object {
         private const val ARG_PATH = "rtfPath"
-
         fun newInstance(path: String) = RtfViewerFragment().apply {
             arguments = bundleOf(ARG_PATH to path)
         }
     }
+
+    // ── Result container ──────────────────────────────────────────────────────
+
+    /** Return type from [loadRtf] so bytes are read only once per load. */
+    private data class RtfLoadResult(
+        val html:        String,
+        val stats:       String,
+        val editContent: SpannableStringBuilder
+    )
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -108,10 +138,9 @@ class RtfViewerFragment : Fragment() {
         binding.progressBar.isVisible = true
 
         configureWebView()
+        decorateToolbarButtonLabels()
         setupButtonListeners()
 
-        // Disable edit button for encrypted files (edit-then-save would require
-        // re-encrypting, which is not yet supported for .9genc RTF files)
         if (file.name.endsWith(".9genc", ignoreCase = true)) {
             binding.btnEdit.isEnabled = false
             binding.btnEdit.alpha = 0.4f
@@ -121,18 +150,34 @@ class RtfViewerFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        toolbarHandler.removeCallbacks(toolbarRunnable)
         binding.webView.destroy()
         _binding = null
         super.onDestroyView()
     }
 
-    // ── Button setup ──────────────────────────────────────────────────────────
+    // ── Toolbar label decoration ──────────────────────────────────────────────
+
+    /**
+     * Applies [UnderlineSpan] to the "U" button label and [StrikethroughSpan]
+     * to the "S" button label so users can see at a glance what each button does.
+     */
+    private fun decorateToolbarButtonLabels() {
+        binding.btnFmtUnderline.text = SpannableString("U").apply {
+            setSpan(UnderlineSpan(), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        binding.btnFmtStrike.text = SpannableString("S").apply {
+            setSpan(StrikethroughSpan(), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+    }
+
+    // ── Button wiring ─────────────────────────────────────────────────────────
 
     private fun setupButtonListeners() {
-        binding.btnEdit.setOnClickListener { enterEditMode() }
-        binding.btnSave.setOnClickListener { saveDocument() }
+        binding.btnEdit.setOnClickListener   { enterEditMode() }
+        binding.btnSave.setOnClickListener   { saveDocument() }
         binding.btnCancel.setOnClickListener { maybeExitEditMode() }
-        binding.btnShare.setOnClickListener { currentFile?.let { shareFile(it) } }
+        binding.btnShare.setOnClickListener  { currentFile?.let { shareFile(it) } }
 
         binding.btnTextSize.setOnClickListener {
             if (bodyHtml.isEmpty()) return@setOnClickListener
@@ -140,17 +185,44 @@ class RtfViewerFragment : Fragment() {
             binding.webView.loadDataWithBaseURL(
                 null, wrapHtml(bodyHtml), "text/html", "UTF-8", null)
             val label = listOf("Small", "Medium", "Large", "X-Large")[textSizeStep]
-            com.google.android.material.snackbar.Snackbar
-                .make(binding.root, "Text size: $label",
-                    com.google.android.material.snackbar.Snackbar.LENGTH_SHORT)
-                .show()
+            Snackbar.make(binding.root, "Text size: $label", Snackbar.LENGTH_SHORT).show()
         }
+
+        // Formatting toolbar buttons
+        binding.btnFmtBold.setOnClickListener {
+            applyToggle { toggleSpan(StyleSpan(Typeface.BOLD), StyleSpan::class.java) {
+                it.style == Typeface.BOLD }
+            }
+        }
+        binding.btnFmtItalic.setOnClickListener {
+            applyToggle { toggleSpan(StyleSpan(Typeface.ITALIC), StyleSpan::class.java) {
+                it.style == Typeface.ITALIC }
+            }
+        }
+        binding.btnFmtUnderline.setOnClickListener {
+            applyToggle { toggleSpan(UnderlineSpan(), UnderlineSpan::class.java) { true } }
+        }
+        binding.btnFmtStrike.setOnClickListener {
+            applyToggle { toggleSpan(StrikethroughSpan(), StrikethroughSpan::class.java) { true } }
+        }
+
+        // Update toolbar active-state indicators whenever the user taps in the editor
+        // (covers cursor repositioning; selection changes are covered by afterTextChanged)
+        binding.etEditor.setOnClickListener { updateToolbarState() }
 
         binding.etEditor.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
-                if (isEditMode) isDirty = true
+                if (isEditMode) {
+                    isDirty = true
+                    // Debounce: cancel any queued toolbar refresh and schedule a
+                    // new one 150 ms from now.  This prevents O(spans) work on
+                    // every keystroke while still keeping the active-state
+                    // indicators accurate after the user pauses.
+                    toolbarHandler.removeCallbacks(toolbarRunnable)
+                    toolbarHandler.postDelayed(toolbarRunnable, 150L)
+                }
             }
         })
     }
@@ -164,49 +236,56 @@ class RtfViewerFragment : Fragment() {
             binding.progressBar.isVisible = false
             when {
                 result.isSuccess -> {
-                    val (html, plainText, stats) = result.getOrThrow()
-                    bodyHtml = html
-                    extractedPlainText = plainText
+                    val (html, stats, content) = result.getOrThrow()
+                    bodyHtml        = html
+                    editableContent = content
                     binding.tvDocInfo.text = stats
-                    binding.webView.loadDataWithBaseURL(null, wrapHtml(html), "text/html", "UTF-8", null)
+                    binding.webView.loadDataWithBaseURL(
+                        null, wrapHtml(html), "text/html", "UTF-8", null)
                     binding.webView.isVisible = true
                 }
-                else -> showError("Could not render document: ${result.exceptionOrNull()?.message}")
+                else -> showError(
+                    "Could not render document: ${result.exceptionOrNull()?.message}")
             }
         }
     }
 
-    // ── Edit / View mode switching ────────────────────────────────────────────
+    // ── Edit / view mode switching ────────────────────────────────────────────
 
     private fun enterEditMode() {
         isEditMode = true
+        binding.webView.isVisible          = false
+        binding.scrollEditor.isVisible     = true
+        binding.formattingToolbar.isVisible = true
+        binding.btnEdit.isVisible          = false
+        binding.btnSave.isVisible          = true
+        binding.btnCancel.isVisible        = true
+        binding.btnTextSize.isEnabled      = false
+        binding.btnTextSize.alpha          = 0.4f
+        binding.tvDocInfo.text             = "Editing"
+
+        // Hand the SpannableStringBuilder directly to the EditText as an editable
+        // buffer.  EDITABLE buffer type preserves the spans and keeps them live
+        // as the user types, so toolbar toggles take immediate visible effect.
+        binding.etEditor.setText(editableContent, TextView.BufferType.EDITABLE)
+        // setText triggers afterTextChanged which sets isDirty=true; reset it now
+        // so Cancel does not show a spurious "Discard changes?" dialog on entry.
         isDirty = false
-        binding.webView.isVisible = false
-        binding.scrollEditor.isVisible = true
-        binding.btnEdit.isVisible = false
-        binding.btnSave.isVisible = true
-        binding.btnCancel.isVisible = true
-        binding.btnTextSize.isEnabled = false
-        binding.btnTextSize.alpha = 0.4f
-        binding.tvDocInfo.text = "Editing"
-        // Populate the editor with the raw RTF markup so the save path can write
-        // it straight back to disk, preserving all formatting control words.
-        // (Populating with extractedPlainText would throw away every formatting
-        // tag and produce an unformatted document on save.)
-        binding.etEditor.setText(rawRtfSource)
         binding.etEditor.requestFocus()
+        updateToolbarState()
     }
 
     private fun exitEditMode() {
         isEditMode = false
-        isDirty = false
-        binding.scrollEditor.isVisible = false
-        binding.webView.isVisible = true
-        binding.btnEdit.isVisible = true
-        binding.btnSave.isVisible = false
-        binding.btnCancel.isVisible = false
-        binding.btnTextSize.isEnabled = true
-        binding.btnTextSize.alpha = 1f
+        isDirty    = false
+        binding.scrollEditor.isVisible     = false
+        binding.formattingToolbar.isVisible = false
+        binding.webView.isVisible          = true
+        binding.btnEdit.isVisible          = true
+        binding.btnSave.isVisible          = false
+        binding.btnCancel.isVisible        = false
+        binding.btnTextSize.isEnabled      = true
+        binding.btnTextSize.alpha          = 1f
     }
 
     private fun maybeExitEditMode() {
@@ -228,49 +307,149 @@ class RtfViewerFragment : Fragment() {
         val file = currentFile ?: return
         if (file.name.endsWith(".9genc", ignoreCase = true)) {
             Snackbar.make(binding.root,
-                "Cannot save encrypted RTF files directly.", Snackbar.LENGTH_LONG).show()
+                "Cannot save encrypted RTF files directly.",
+                Snackbar.LENGTH_LONG).show()
             return
         }
 
-        val editedText = binding.etEditor.text?.toString() ?: ""
+        // Snapshot the live editable — this SpannableStringBuilder holds every
+        // span the user has added or removed via the toolbar.
+        val ssb = binding.etEditor.editableText
+            ?: SpannableStringBuilder(binding.etEditor.text ?: "")
+
+        // IMPORTANT: serializeSpannableToRtf reads Android Spannable/Editable
+        // which is NOT thread-safe.  Perform serialization here on the main
+        // thread and pass only the resulting plain String to the IO dispatcher.
+        val rtfContent = serializeSpannableToRtf(ssb)
+
         binding.progressBar.isVisible = true
 
         viewLifecycleOwner.lifecycleScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 try {
-                    // Write the raw RTF markup straight back using ISO-8859-1 — the same
-                    // encoding used when loading, so all control words and \'xx hex
-                    // escapes round-trip without corruption.
-                    // Do NOT call serializeToRtf() here: that function only produces a
-                    // plain-text RTF skeleton and would permanently discard every
-                    // formatting tag present in the original document.
-                    file.writeText(editedText, Charsets.ISO_8859_1)
+                    // Write pre-serialized RTF string; all non-ASCII was already
+                    // escaped to \\uN? by the serializer so US-ASCII is safe.
+                    file.writeText(rtfContent, Charsets.US_ASCII)
                     true
-                } catch (e: IOException) {
-                    false
-                }
+                } catch (e: Exception) { false }
             }
             if (_binding == null) return@launch
             binding.progressBar.isVisible = false
             if (ok) {
-                rawRtfSource = editedText
                 isDirty = false
-                // Reload view with new content
-                val html = withContext(Dispatchers.IO) {
+                // Re-parse so the WebView reflects the saved state and editableContent
+                // is fresh for the next edit session.
+                val reloaded = withContext(Dispatchers.IO) {
                     runCatching { loadRtf(file).getOrThrow() }
                 }
-                if (html.isSuccess) {
-                    val (newHtml, plainText, stats) = html.getOrThrow()
-                    bodyHtml = newHtml
-                    extractedPlainText = plainText
+                if (reloaded.isSuccess) {
+                    val (html, stats, content) = reloaded.getOrThrow()
+                    bodyHtml        = html
+                    editableContent = content
                     binding.tvDocInfo.text = stats
-                    binding.webView.loadDataWithBaseURL(null, wrapHtml(newHtml), "text/html", "UTF-8", null)
+                    binding.webView.loadDataWithBaseURL(
+                        null, wrapHtml(html), "text/html", "UTF-8", null)
                 }
                 exitEditMode()
-                Snackbar.make(binding.root, "Saved successfully", Snackbar.LENGTH_SHORT).show()
+                Snackbar.make(binding.root, "Saved successfully",
+                    Snackbar.LENGTH_SHORT).show()
             } else {
-                Snackbar.make(binding.root, "Save failed — check storage permissions", Snackbar.LENGTH_LONG).show()
+                Snackbar.make(binding.root,
+                    "Save failed — check storage permissions",
+                    Snackbar.LENGTH_LONG).show()
             }
+        }
+    }
+
+    // ── Formatting toolbar logic ──────────────────────────────────────────────
+
+    /**
+     * Runs [block] on the editor's current selection, then marks the document
+     * dirty and refreshes toolbar active states.
+     */
+    private fun applyToggle(block: SpannableStringBuilder.() -> Unit) {
+        val ssb = binding.etEditor.editableText ?: return
+        (ssb as SpannableStringBuilder).block()
+        isDirty = true
+        updateToolbarState()
+    }
+
+    /**
+     * Toggles a span of type [T] over the current selection in this
+     * [SpannableStringBuilder].
+     *
+     * Behaviour matches Word / Google Docs:
+     * - If every character in the selection is already covered by a matching
+     *   span → remove those spans (toggle off).
+     * - Otherwise → remove any partial spans and apply one new span over the
+     *   whole selection (toggle on, promoting partial formatting to full).
+     *
+     * @param spanClass  The span class to inspect (e.g. [UnderlineSpan]).
+     * @param predicate  Extra filter for distinguishing sub-types, e.g. bold
+     *                   vs italic [StyleSpan].
+     */
+    private fun <T : Any> SpannableStringBuilder.toggleSpan(
+        newSpan: T,
+        spanClass: Class<T>,
+        predicate: (T) -> Boolean
+    ) {
+        val selStart = binding.etEditor.selectionStart
+        val selEnd   = binding.etEditor.selectionEnd
+        if (selStart < 0 || selEnd < 0 || selStart >= selEnd) return
+
+        val existing = getSpans(selStart, selEnd, spanClass).filter(predicate)
+
+        // "Fully covered" = at least one span starts at-or-before selStart
+        // AND ends at-or-after selEnd, with no gaps (simplified: check coverage
+        // at first and last character).
+        val fullyOn = existing.any { s ->
+            getSpanStart(s) <= selStart && getSpanEnd(s) >= selEnd
+        }
+
+        // Remove all overlapping spans of this type regardless, so we get a
+        // clean state before (conditionally) re-applying.
+        existing.forEach { removeSpan(it) }
+
+        if (!fullyOn) {
+            // Toggle on — one unbroken span over the whole selection.
+            setSpan(newSpan, selStart, selEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        // Toggle off — spans were just removed above, nothing more to do.
+    }
+
+    /**
+     * Reflects the formatting active at the current cursor position (or
+     * selection start) in the toolbar button appearance.
+     */
+    private fun updateToolbarState() {
+        if (!isEditMode) return
+        val ssb = binding.etEditor.editableText ?: return
+        val pos = (binding.etEditor.selectionStart - 1).coerceAtLeast(0)
+            .coerceAtMost((ssb.length - 1).coerceAtLeast(0))
+
+        val styleSpans = ssb.getSpans(pos, pos + 1, StyleSpan::class.java)
+        val isBold      = styleSpans.any { it.style == Typeface.BOLD }
+        val isItalic    = styleSpans.any { it.style == Typeface.ITALIC }
+        val isUnderline = ssb.getSpans(pos, pos + 1, UnderlineSpan::class.java).isNotEmpty()
+        val isStrike    = ssb.getSpans(pos, pos + 1, StrikethroughSpan::class.java).isNotEmpty()
+
+        setToolbarButtonActive(binding.btnFmtBold,      isBold)
+        setToolbarButtonActive(binding.btnFmtItalic,    isItalic)
+        setToolbarButtonActive(binding.btnFmtUnderline, isUnderline)
+        setToolbarButtonActive(binding.btnFmtStrike,    isStrike)
+    }
+
+    private fun setToolbarButtonActive(btn: MaterialButton, active: Boolean) {
+        val ctx = btn.context
+        if (active) {
+            btn.setTextColor(MaterialColors.getColor(
+                ctx, com.google.android.material.R.attr.colorPrimary, Color.BLUE))
+            btn.setBackgroundColor(MaterialColors.getColor(
+                ctx, com.google.android.material.R.attr.colorPrimaryContainer, Color.LTGRAY))
+        } else {
+            btn.setTextColor(MaterialColors.getColor(
+                ctx, com.google.android.material.R.attr.colorOnSurfaceVariant, Color.GRAY))
+            btn.setBackgroundColor(Color.TRANSPARENT)
         }
     }
 
@@ -280,14 +459,14 @@ class RtfViewerFragment : Fragment() {
         binding.webView.apply {
             webViewClient = WebViewClient()
             settings.apply {
-                javaScriptEnabled = false
+                javaScriptEnabled    = false
                 loadWithOverviewMode = false
-                useWideViewPort = false
-                textZoom = 100
-                cacheMode = WebSettings.LOAD_NO_CACHE
+                useWideViewPort      = false
+                textZoom             = 100
+                cacheMode            = WebSettings.LOAD_NO_CACHE
                 setSupportZoom(true)
-                builtInZoomControls = true
-                displayZoomControls = false
+                builtInZoomControls    = true
+                displayZoomControls    = false
             }
             isVisible = false
         }
@@ -295,12 +474,13 @@ class RtfViewerFragment : Fragment() {
 
     // ── RTF loading ───────────────────────────────────────────────────────────
 
-    private suspend fun loadRtf(file: File): Result<Triple<String, String, String>> = runCatching {
+    private suspend fun loadRtf(file: File): Result<RtfLoadResult> = runCatching {
         val bytes: ByteArray = if (EncryptionUtils.isEncrypted(file)) {
             when (EncryptionUtils.detectFormat(file)) {
                 EncryptionUtils.EncryptionFormat.DEVICE_KEY ->
-                    EncryptionUtils.decryptDeviceToBytes(file) { DeviceKeyManager.decryptSessionKey(it) }
-                        ?: error("Decryption failed — file may be encrypted for a different device")
+                    EncryptionUtils.decryptDeviceToBytes(file) {
+                        DeviceKeyManager.decryptSessionKey(it)
+                    } ?: error("Decryption failed — file may be encrypted for a different device")
                 EncryptionUtils.EncryptionFormat.PASSWORD_BASED ->
                     error("Password-encrypted file. Decrypt it via the Secure Vault first.")
                 null -> error("Unknown encryption format")
@@ -310,21 +490,18 @@ class RtfViewerFragment : Fragment() {
         }
 
         val (html, plainText) = parseRtf(bytes)
-
-        // Preserve the raw source (ISO-8859-1) so the editor can round-trip without
-        // discarding formatting through serializeToRtf.
-        rawRtfSource = String(bytes, Charsets.ISO_8859_1)
+        val editContent       = parseRtfToSpannable(bytes)
 
         val wordCount = plainText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
-        val charCount = plainText.length
-        val stats = "$wordCount words · $charCount characters"
+        val stats     = "$wordCount words · ${plainText.length} characters"
 
-        Triple(html, plainText, stats)
+        RtfLoadResult(html, stats, editContent)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // RTF PARSER
-    // Converts an RTF byte stream → (HTML body, plain text) in one pass.
+    // SHARED FORMATTING STATE
+    // FmtState is used by both parse paths (HTML and Spannable).
+    // applyFmtState updates it and returns any literal text to emit.
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
@@ -332,71 +509,125 @@ class RtfViewerFragment : Fragment() {
      * at each `{` and popped at `}`.
      */
     private data class FmtState(
-        var bold: Boolean       = false,
-        var italic: Boolean     = false,
-        var underline: Boolean  = false,
-        var strike: Boolean     = false,
-        var superscript: Boolean = false,
-        var subscript: Boolean  = false,
-        var fontSize: Int       = 24,   // half-points; 24 = 12 pt
-        var colorIndex: Int     = 0,
-        var highlightIndex: Int = 0,
-        var align: String       = "left",
-        var leftIndent: Int     = 0,
-        var isSkip: Boolean     = false  // inside \* group — discard content
+        var bold:         Boolean = false,
+        var italic:       Boolean = false,
+        var underline:    Boolean = false,
+        var strike:       Boolean = false,
+        var superscript:  Boolean = false,
+        var subscript:    Boolean = false,
+        var fontSize:     Int     = 24,   // half-points; 24 = 12 pt
+        var colorIndex:   Int     = 0,
+        var highlightIndex: Int   = 0,
+        var align:        String  = "left",
+        var leftIndent:   Int     = 0,
+        var isSkip:       Boolean = false
     ) {
         fun copy() = FmtState(bold, italic, underline, strike, superscript, subscript,
             fontSize, colorIndex, highlightIndex, align, leftIndent, isSkip)
     }
 
     /**
-     * Parse [bytes] as an RTF document.
+     * Updates [cur]'s [FmtState] for the given RTF control word and optional
+     * numeric parameter.
      *
-     * @return Pair of (HTML body string, extracted plain text string)
+     * @return Literal text that the caller should emit at the current position
+     *   (e.g. `"\n"` for `\par`, `"\u2014"` for `\emdash`), or **`null`** if
+     *   the word is a pure state change or is silently ignored.
      */
+    private fun applyFmtState(word: String, num: Int, cur: () -> FmtState): String? {
+        val hasNum = num != Int.MIN_VALUE
+        when (word) {
+
+            // ── Paragraph / structural breaks ────────────────────────────
+            "par", "page", "sect", "column" -> return "\n"
+            "line" -> return "\n"
+            "tab"  -> return "\t"
+
+            // ── Character formatting ──────────────────────────────────────
+            "b"              -> cur().bold       = !(hasNum && num == 0)
+            "i"              -> cur().italic     = !(hasNum && num == 0)
+            "ul","uld","uldb","ulwave"
+                             -> cur().underline  = !(hasNum && num == 0)
+            "ulnone"         -> cur().underline  = false
+            "strike","striked"
+                             -> cur().strike     = !(hasNum && num == 0)
+            "super"          -> { cur().superscript = true;  cur().subscript   = false }
+            "sub"            -> { cur().subscript   = true;  cur().superscript = false }
+            "nosupersub"     -> { cur().superscript = false; cur().subscript   = false }
+            "fs"             -> if (hasNum && num > 0) cur().fontSize     = num
+            "cf"             -> cur().colorIndex    = if (hasNum) num else 0
+            "cb","highlight" -> cur().highlightIndex = if (hasNum) num else 0
+
+            "plain" -> cur().also {
+                it.bold = false; it.italic = false; it.underline = false
+                it.strike = false; it.superscript = false; it.subscript = false
+                it.fontSize = 24; it.colorIndex = 0; it.highlightIndex = 0
+            }
+            "pard"  -> cur().also {
+                it.align = "left"; it.leftIndent = 0
+                it.bold = false; it.italic = false; it.underline = false
+                it.strike = false; it.superscript = false; it.subscript = false
+                it.fontSize = 24; it.colorIndex = 0; it.highlightIndex = 0
+            }
+
+            // ── Paragraph alignment / indent ──────────────────────────────
+            "ql" -> cur().align = "left"
+            "qc" -> cur().align = "center"
+            "qr" -> cur().align = "right"
+            "qj" -> cur().align = "justify"
+            "li" -> if (hasNum) cur().leftIndent = num
+
+            // ── Special characters ────────────────────────────────────────
+            "emdash"    -> return "\u2014"
+            "endash"    -> return "\u2013"
+            "bullet"    -> return "\u2022"
+            "lquote"    -> return "\u2018"
+            "rquote"    -> return "\u2019"
+            "ldblquote" -> return "\u201C"
+            "rdblquote" -> return "\u201D"
+            "enspace"   -> return "\u2002"
+            "emspace"   -> return "\u2003"
+            "qmspace"   -> return "\u2004"
+        }
+        return null  // state-only update, or silently ignored control word
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // RTF → HTML PARSER (view mode)
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun parseRtf(bytes: ByteArray): Pair<String, String> {
-        // ── Pass 0: detect encoding & read as latin-1 (RTF is 7-bit ASCII + \'xx escapes)
         val src = String(bytes, Charsets.ISO_8859_1)
         if (src.length < 5 || !src.startsWith("{\\rtf")) {
-            // Fallback: treat as plain text
             val plain = String(bytes, Charsets.UTF_8)
-            return Pair("<p>${plain.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")}</p>", plain)
+            return Pair(
+                "<p>${plain.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")}</p>",
+                plain)
         }
 
-        // ── Pass 1: extract color table ─────────────────────────────────────
-        val colorTable: List<String> = extractColorTable(src)
+        val colorTable = extractColorTable(src)
 
-        // ── Pass 2: parse RTF into HTML ─────────────────────────────────────
-        val html       = StringBuilder()
-        val plainText  = StringBuilder()
-
-        val stack      = ArrayDeque<FmtState>()
+        val html      = StringBuilder()
+        val plainText = StringBuilder()
+        val stack     = ArrayDeque<FmtState>()
         stack.addLast(FmtState())
 
-        // Current paragraph accumulator
-        val paraHtml   = StringBuilder()
-        val paraPlain  = StringBuilder()
+        val paraHtml  = StringBuilder()
+        val paraPlain = StringBuilder()
 
-        // Table state
-        var inTable    = false
-        var tableHtml  = StringBuilder()
+        var inTable   = false
+        var tableHtml = StringBuilder()
 
         var i = 0
         val len = src.length
 
         fun cur(): FmtState = stack.last()
 
-        // Flush para HTML into main html buffer
         fun flushParagraph(forceBlank: Boolean = false) {
-            if (inTable) {
-                tableHtml.append(paraHtml)
-                paraHtml.clear()
-                paraPlain.append('\n')
-                return
-            }
+            if (inTable) { tableHtml.append(paraHtml); paraHtml.clear(); paraPlain.append('\n'); return }
             val content = paraHtml.toString()
             if (content.isNotEmpty()) {
-                val alignStyle = when (cur().align) {
+                val alignStyle  = when (cur().align) {
                     "center"  -> " style='text-align:center'"
                     "right"   -> " style='text-align:right'"
                     "justify" -> " style='text-align:justify'"
@@ -413,18 +644,15 @@ class RtfViewerFragment : Fragment() {
                 html.append("<p class='blank'></p>\n")
                 plainText.append('\n')
             }
-            paraHtml.clear()
-            paraPlain.clear()
+            paraHtml.clear(); paraPlain.clear()
         }
 
-        // Wrap a run of text with current formatting tags
         fun applyFormatting(text: String): String {
             if (text.isEmpty()) return ""
             var s = text
             val f = cur()
             if (f.fontSize != 24) {
-                val pt = f.fontSize / 2
-                val em = "%.2f".format(pt / 12.0)
+                val em = "%.2f".format(f.fontSize / 2.0 / 12.0)
                 s = "<span style='font-size:${em}em'>$s</span>"
             }
             if (f.highlightIndex > 0) {
@@ -451,152 +679,84 @@ class RtfViewerFragment : Fragment() {
             paraPlain.append(raw)
         }
 
-        // ── Main parsing loop ────────────────────────────────────────────────
         while (i < len) {
             when (src[i]) {
-                '{' -> {
-                    stack.addLast(cur().copy())
-                    i++
-                }
-                '}' -> {
-                    if (stack.size > 1) stack.removeLast()
-                    i++
-                }
+                '{' -> { stack.addLast(cur().copy()); i++ }
+                '}' -> { if (stack.size > 1) stack.removeLast(); i++ }
                 '\\' -> {
-                    i++
-                    if (i >= len) break
+                    i++; if (i >= len) break
                     when (src[i]) {
                         '\\' -> { appendText("\\"); i++ }
-                        '{' ->  { appendText("{");  i++ }
-                        '}' ->  { appendText("}");  i++ }
-                        '\r', '\n' -> { /* paragraph mark in some RTF */ flushParagraph(false); i++ }
+                        '{'  -> { appendText("{");  i++ }
+                        '}'  -> { appendText("}");  i++ }
+                        '\r', '\n' -> { flushParagraph(false); i++ }
                         '\'' -> {
-                            // Hex-encoded char: \'XX
                             i++
                             if (i + 1 < len) {
-                                val hex = src.substring(i, i + 2)
-                                val code = hex.toIntOrNull(16) ?: 0
-                                appendText(code.toChar().toString())
-                                i += 2
+                                val code = src.substring(i, i + 2).toIntOrNull(16) ?: 0
+                                appendText(code.toChar().toString()); i += 2
                             }
                         }
-                        '-' -> { appendText("\u00AD"); i++ }   // optional hyphen
-                        '_' -> { appendText("\u2011"); i++ }   // non-breaking hyphen
-                        '~' -> { appendText("\u00A0"); i++ }   // non-breaking space
-                        '*' -> {
-                            // \* — the immediately enclosing group should be skipped
-                            cur().isSkip = true; i++
-                        }
+                        '-' -> { appendText("\u00AD"); i++ }
+                        '_' -> { appendText("\u2011"); i++ }
+                        '~' -> { appendText("\u00A0"); i++ }
+                        '*' -> { cur().isSkip = true; i++ }
                         else -> {
-                            // Read control word: letters only
                             val wordStart = i
                             while (i < len && src[i].isLetter()) i++
                             val word = src.substring(wordStart, i)
 
-                            // Read optional numeric parameter
                             var negative = false
                             if (i < len && src[i] == '-') { negative = true; i++ }
                             val numStart = i
                             while (i < len && src[i].isDigit()) i++
                             val numStr = src.substring(numStart, i)
-                            val num = if (numStr.isNotEmpty()) {
+                            val num = if (numStr.isNotEmpty())
                                 (if (negative) -1 else 1) * numStr.toInt()
-                            } else Int.MIN_VALUE  // sentinel = no number given
-
-                            // Consume trailing space delimiter (part of RTF syntax)
+                            else Int.MIN_VALUE
                             if (i < len && src[i] == ' ') i++
 
                             if (cur().isSkip && word != "*") {
-                                // Inside a skip group — still need to handle nested groups
-                                // but discard content. Control words inside \* groups
-                                // are intentionally ignored.
+                                // discard — inside \* ignorable destination
                             } else if (word == "u" && num != Int.MIN_VALUE) {
-                                // Unicode escape: \uN? — handle here where `i` is in scope
-                                // so we can skip the mandatory RTF fallback character.
-                                // applyControlWord cannot do this because it has no access to i.
-                                val codePoint = if (num < 0) num + 65536 else num
-                                try {
-                                    appendText(String(Character.toChars(codePoint)))
-                                } catch (_: Exception) {
-                                    appendText("?")
-                                }
-                                // RTF spec §1.6: exactly one character follows \uN as an
-                                // ASCII fallback for older readers.  Skip it so it is not
-                                // also emitted as a duplicate literal character.
+                                val cp = if (num < 0) num + 65536 else num
+                                try { appendText(String(Character.toChars(cp))) }
+                                catch (_: Exception) { appendText("?") }
                                 if (i < len && src[i] != '{' && src[i] != '}' && src[i] != '\\') i++
                             } else {
-                                applyControlWord(word, num, ::cur,
-                                    ::appendText, ::flushParagraph,
-                                    paraHtml, html, plainText,
-                                    inTable.also { /* captured below */ },
-                                    tableHtml,
-                                    colorTable)
+                                applyControlWord(word, num, ::cur, ::appendText,
+                                    ::flushParagraph, paraHtml, html, plainText,
+                                    inTable, tableHtml, colorTable)
 
-                                // Handle table state changes returned from control word handler
                                 when (word) {
                                     "trowd" -> {
-                                        if (!inTable) {
-                                            inTable = true
-                                            tableHtml = StringBuilder("<table>\n")
-                                        }
+                                        if (!inTable) { inTable = true; tableHtml = StringBuilder("<table>\n") }
                                         tableHtml.append("<tr>")
                                     }
-                                    "row" -> {
-                                        flushParagraph(false)
-                                        tableHtml.append("</tr>\n")
-                                    }
-                                    "cell" -> {
-                                        val content = paraHtml.toString()
-                                        paraHtml.clear(); paraPlain.clear()
-                                        tableHtml.append("<td>$content</td>")
+                                    "row"   -> { flushParagraph(false); tableHtml.append("</tr>\n") }
+                                    "cell"  -> {
+                                        val ct = paraHtml.toString(); paraHtml.clear(); paraPlain.clear()
+                                        tableHtml.append("<td>$ct</td>")
                                     }
                                     "intbl" -> inTable = true
-                                    "pard"  -> {
-                                        // On \pard, if we were in a table and now are not,
-                                        // close the table
-                                    }
-                                }
-
-                                // Close table when we see \pard outside intbl context
-                                if (word == "pard" && inTable) {
-                                    // Check if we're really outside a table now
-                                    // (simplified: close table on next non-intbl paragraph)
                                 }
                             }
-
-                            // Unicode escape \uN? is handled in the else-if branch above.
                         }
                     }
                 }
-                '\r', '\n' -> i++ // ignored in RTF
-                else -> {
-                    if (!cur().isSkip) {
-                        appendText(src[i].toString())
-                    }
-                    i++
-                }
+                '\r', '\n' -> i++
+                else -> { if (!cur().isSkip) appendText(src[i].toString()); i++ }
             }
         }
 
-        // Flush any remaining paragraph
         flushParagraph(false)
-
-        // Close any open table
-        if (inTable) {
-            tableHtml.append("</table>\n")
-            html.append(tableHtml)
-        }
+        if (inTable) { tableHtml.append("</table>\n"); html.append(tableHtml) }
 
         return Pair(html.toString(), plainText.toString().trim())
     }
 
-    /**
-     * Applies a single RTF control word to the current formatting state.
-     * Handles character/paragraph formatting, special chars, and structural words.
-     */
     private fun applyControlWord(
-        word: String,
-        num: Int,
+        word: String, num: Int,
         cur: () -> FmtState,
         appendText: (String) -> Unit,
         flushParagraph: (Boolean) -> Unit,
@@ -609,112 +769,260 @@ class RtfViewerFragment : Fragment() {
     ) {
         val hasNum = num != Int.MIN_VALUE
         when (word) {
-            // ── Paragraph breaks ────────────────────────────────────────
             "par"    -> flushParagraph(true)
             "line"   -> { paraHtml.append("<br>"); plainText.append('\n') }
             "page"   -> { flushParagraph(true); html.append("<hr class='page-break'>\n") }
             "sect"   -> { flushParagraph(true); html.append("<hr>\n") }
             "column" -> flushParagraph(true)
-
-            // ── Tab ─────────────────────────────────────────────────────
             "tab"    -> { paraHtml.append("&nbsp;&nbsp;&nbsp;&nbsp;"); plainText.append('\t') }
 
-            // ── Character formatting ─────────────────────────────────────
-            "b"      -> cur().bold       = !(hasNum && num == 0)
-            "i"      -> cur().italic     = !(hasNum && num == 0)
-            "ul"     -> cur().underline  = !(hasNum && num == 0)
-            "uld"    -> cur().underline  = !(hasNum && num == 0)  // dotted underline
-            "uldb"   -> cur().underline  = !(hasNum && num == 0)  // double underline
-            "ulwave" -> cur().underline  = !(hasNum && num == 0)  // wave underline
-            "ulnone" -> cur().underline  = false
-            "strike" -> cur().strike     = !(hasNum && num == 0)
-            "striked"-> cur().strike     = !(hasNum && num == 0)
+            "b"              -> cur().bold        = !(hasNum && num == 0)
+            "i"              -> cur().italic      = !(hasNum && num == 0)
+            "ul","uld","uldb","ulwave"
+                             -> cur().underline   = !(hasNum && num == 0)
+            "ulnone"         -> cur().underline   = false
+            "strike","striked"
+                             -> cur().strike      = !(hasNum && num == 0)
+            "super"          -> { cur().superscript = true;  cur().subscript   = false }
+            "sub"            -> { cur().subscript   = true;  cur().superscript = false }
+            "nosupersub"     -> { cur().superscript = false; cur().subscript   = false }
+            "fs"             -> if (hasNum && num > 0) cur().fontSize     = num
+            "cf"             -> cur().colorIndex    = if (hasNum) num else 0
+            "cb","highlight" -> cur().highlightIndex = if (hasNum) num else 0
 
-            "super"  -> { cur().superscript = true;  cur().subscript = false }
-            "sub"    -> { cur().subscript   = true;  cur().superscript = false }
-            "nosupersub" -> { cur().superscript = false; cur().subscript = false }
-
-            "fs"     -> if (hasNum && num > 0) cur().fontSize = num
-            "cf"     -> cur().colorIndex = if (hasNum) num else 0
-            "cb", "highlight" -> cur().highlightIndex = if (hasNum) num else 0
-
-            "plain"  -> {
-                // Reset ALL character formatting to defaults
-                val c = cur()
-                c.bold = false; c.italic = false; c.underline = false
-                c.strike = false; c.superscript = false; c.subscript = false
-                c.fontSize = 24; c.colorIndex = 0; c.highlightIndex = 0
+            "plain" -> cur().also {
+                it.bold = false; it.italic = false; it.underline = false
+                it.strike = false; it.superscript = false; it.subscript = false
+                it.fontSize = 24; it.colorIndex = 0; it.highlightIndex = 0
+            }
+            "pard"  -> cur().also {
+                it.align = "left"; it.leftIndent = 0
+                it.bold = false; it.italic = false; it.underline = false
+                it.strike = false; it.superscript = false; it.subscript = false
+                it.fontSize = 24; it.colorIndex = 0; it.highlightIndex = 0
             }
 
-            // ── Paragraph formatting ─────────────────────────────────────
-            "pard"   -> {
-                val c = cur()
-                c.align = "left"; c.leftIndent = 0
-                c.bold = false; c.italic = false; c.underline = false
-                c.strike = false; c.superscript = false; c.subscript = false
-                c.fontSize = 24; c.colorIndex = 0; c.highlightIndex = 0
-            }
-            "ql"     -> cur().align = "left"
-            "qc"     -> cur().align = "center"
-            "qr"     -> cur().align = "right"
-            "qj"     -> cur().align = "justify"
-            "li"     -> if (hasNum) cur().leftIndent = num
+            "ql" -> cur().align = "left"
+            "qc" -> cur().align = "center"
+            "qr" -> cur().align = "right"
+            "qj" -> cur().align = "justify"
+            "li" -> if (hasNum) cur().leftIndent = num
 
-            // ── Unicode ──────────────────────────────────────────────────
-            // NOTE: \uN? is handled directly in the main parsing loop (parseRtf)
-            // so that the RTF fallback character following the escape can be
-            // consumed via the loop's `i` index.  No case needed here.
+            // NOTE: \uN? Unicode escapes are handled in the main loop where `i` is
+            // accessible, so the mandatory fallback character can be consumed.
 
-            // ── Special characters ───────────────────────────────────────
-            "emdash"     -> appendText("\u2014")
-            "endash"     -> appendText("\u2013")
-            "bullet"     -> appendText("\u2022")
-            "lquote"     -> appendText("\u2018")
-            "rquote"     -> appendText("\u2019")
-            "ldblquote"  -> appendText("\u201C")
-            "rdblquote"  -> appendText("\u201D")
-            "enspace"    -> appendText("\u2002")
-            "emspace"    -> appendText("\u2003")
-            "qmspace"    -> appendText("\u2004")
-            "zwbo"       -> { /* zero-width break opportunity — ignore */ }
-            "zwnbo"      -> { /* zero-width non-break opportunity — ignore */ }
+            "emdash"    -> appendText("\u2014")
+            "endash"    -> appendText("\u2013")
+            "bullet"    -> appendText("\u2022")
+            "lquote"    -> appendText("\u2018")
+            "rquote"    -> appendText("\u2019")
+            "ldblquote" -> appendText("\u201C")
+            "rdblquote" -> appendText("\u201D")
+            "enspace"   -> appendText("\u2002")
+            "emspace"   -> appendText("\u2003")
+            "qmspace"   -> appendText("\u2004")
+            "pntext"    -> { /* list item bullet — handled via \bullet / literal */ }
 
-            // ── List item detection ──────────────────────────────────────
-            // RTF list items are signalled by \listtext groups; we treat
-            // them as bullet paragraphs by prepending a bullet on \pntext.
-            "pntext"     -> { /* handled via \bullet or literal bullet char */ }
-
-            // ── Section words to silently ignore ────────────────────────
-            "rtf1", "ansi", "ansicpg", "mac", "pc", "pca",
-            "deff", "deflang", "deflangfe",
-            "fonttbl", "colortbl", "stylesheet", "info",
-            "listtable", "listoverridetable",
-            "revtbl", "rsidtbl",
-            "header", "footer", "headerl", "headerr", "headerf",
-            "footerl", "footerr", "footerf",
-            "fldinst", "fldrslt",
-            "pict", "object", "datafield",
-            "shp", "shpinst", "sp",
+            "rtf1","ansi","ansicpg","mac","pc","pca",
+            "deff","deflang","deflangfe",
+            "fonttbl","colortbl","stylesheet","info",
+            "listtable","listoverridetable",
+            "revtbl","rsidtbl",
+            "header","footer","headerl","headerr","headerf",
+            "footerl","footerr","footerf",
+            "fldinst","fldrslt",
+            "pict","object","datafield",
+            "shp","shpinst","sp",
             "wgrffmtfilter",
-            "themedata", "colorschememapping",
-            "xmlns", "xmlopen", "xmlclose",
-            "ts", "tscellpaddfl", "tscellpaddfr", "tscellpaddft", "tscellpaddfb",
+            "themedata","colorschememapping",
+            "xmlns","xmlopen","xmlclose",
+            "ts","tscellpaddfl","tscellpaddfr","tscellpaddft","tscellpaddfb",
             "cellx" -> { /* silently skip */ }
 
-            // ── Anything unrecognised — silently ignore ──────────────────
             else -> { /* unknown control word — ignore per RTF spec */ }
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // RTF → SPANNABLE PARSER (edit mode)
+    // Reuses the same state machine and FmtState as the HTML parser, but emits
+    // a SpannableStringBuilder instead of HTML strings.  applyFmtState handles
+    // all FmtState transitions; content output is managed inline below.
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
-     * Extracts the color table from an RTF source string.
-     * Returns a list of CSS `#RRGGBB` strings indexed from 0
-     * (corresponding to RTF color indices 1, 2, …).
+     * Parses [bytes] as RTF and returns a [SpannableStringBuilder] where all
+     * character formatting (bold, italic, underline, strikethrough, colour,
+     * relative font size, superscript, subscript) is represented as Android
+     * [android.text.style] spans.
+     *
+     * The returned SSB is used directly as the EditText's editable buffer, so
+     * the user sees formatted text — never RTF control codes.
      */
+    private fun parseRtfToSpannable(bytes: ByteArray): SpannableStringBuilder {
+        val ssb = SpannableStringBuilder()
+        val src = String(bytes, Charsets.ISO_8859_1)
+
+        if (src.length < 5 || !src.startsWith("{\\rtf")) {
+            ssb.append(String(bytes, Charsets.UTF_8))
+            return ssb
+        }
+
+        val colorTable = extractColorTable(src)
+
+        // SpanRun: a character range + the FmtState snapshot active during it.
+        // All spans are applied in one pass at the end so we avoid O(n²) setSpan
+        // calls interleaved with text appends.
+        //
+        // Runs are COALESCED: if the incoming FmtState is identical to the last
+        // run and the text is contiguous, we extend the existing run instead of
+        // opening a new one.  Without coalescing, each literal character becomes
+        // its own SpanRun (the main loop emits one char at a time), ballooning a
+        // 5 KB document to ~5 000 runs → ~50 000 setSpan() calls → the EditText
+        // span array becomes enormous, making every keystroke O(N-spans) in the
+        // layout engine and causing the visible freeze.  With coalescing, a whole
+        // paragraph with uniform formatting collapses to a single run regardless
+        // of character count.
+        data class SpanRun(val s: Int, val e: Int, val f: FmtState)
+        val runs = mutableListOf<SpanRun>()
+
+        val stack = ArrayDeque<FmtState>()
+        stack.addLast(FmtState())
+        fun cur(): FmtState = stack.last()
+
+        fun emit(raw: String) {
+            if (cur().isSkip || raw.isEmpty()) return
+            val start = ssb.length
+            ssb.append(raw)
+            val curFmt = cur()
+            val last = runs.lastOrNull()
+            if (last != null && last.e == start && last.f == curFmt) {
+                // Same format as the immediately preceding run and contiguous →
+                // extend it rather than opening a new SpanRun.  This is the key
+                // coalescing step: the main loop emits one character at a time, so
+                // without this check every character becomes its own SpanRun,
+                // inflating a 5 KB document to ~5 000 runs and ~50 000 setSpan()
+                // calls.  The EditText span array then becomes so large that every
+                // keystroke triggers an O(N-spans) layout pass, causing the freeze.
+                runs[runs.size - 1] = last.copy(e = ssb.length)
+            } else {
+                runs.add(SpanRun(start, ssb.length, curFmt.copy()))
+            }
+        }
+
+        // Paragraph break in the editable → single newline character.
+        fun parBreak() { emit("\n") }
+
+        var i = 0
+        val len = src.length
+
+        while (i < len) {
+            when (src[i]) {
+                '{' -> { stack.addLast(cur().copy()); i++ }
+                '}' -> { if (stack.size > 1) stack.removeLast(); i++ }
+                '\\' -> {
+                    i++; if (i >= len) break
+                    when (src[i]) {
+                        '\\' -> { emit("\\"); i++ }
+                        '{'  -> { emit("{");  i++ }
+                        '}'  -> { emit("}");  i++ }
+                        '\r', '\n' -> { parBreak(); i++ }
+                        '\'' -> {
+                            i++
+                            if (i + 1 < len) {
+                                val code = src.substring(i, i + 2).toIntOrNull(16) ?: 0
+                                emit(code.toChar().toString()); i += 2
+                            }
+                        }
+                        '-' -> { emit("\u00AD"); i++ }   // optional hyphen
+                        '_' -> { emit("\u2011"); i++ }   // non-breaking hyphen
+                        '~' -> { emit("\u00A0"); i++ }   // non-breaking space
+                        '*' -> { cur().isSkip = true; i++ }
+                        else -> {
+                            // Read control word
+                            val wordStart = i
+                            while (i < len && src[i].isLetter()) i++
+                            val word = src.substring(wordStart, i)
+
+                            // Read optional numeric parameter
+                            var negative = false
+                            if (i < len && src[i] == '-') { negative = true; i++ }
+                            val numStart = i
+                            while (i < len && src[i].isDigit()) i++
+                            val numStr = src.substring(numStart, i)
+                            val num = if (numStr.isNotEmpty())
+                                (if (negative) -1 else 1) * numStr.toInt()
+                            else Int.MIN_VALUE
+                            if (i < len && src[i] == ' ') i++  // consume trailing space
+
+                            if (cur().isSkip && word != "*") {
+                                // inside \* ignorable destination — discard
+                            } else if (word == "u" && num != Int.MIN_VALUE) {
+                                // Unicode escape \uN?: emit codepoint, skip fallback char
+                                val cp = if (num < 0) num + 65536 else num
+                                try { emit(String(Character.toChars(cp))) }
+                                catch (_: Exception) { emit("?") }
+                                if (i < len && src[i] != '{' && src[i] != '}' && src[i] != '\\') i++
+                            } else {
+                                // Delegate to shared state updater; emit any returned text
+                                val content = applyFmtState(word, num, ::cur)
+                                if (content != null) emit(content)
+                            }
+                        }
+                    }
+                }
+                '\r', '\n' -> i++   // bare newlines are ignored in RTF
+                else -> { if (!cur().isSkip) emit(src[i].toString()); i++ }
+            }
+        }
+
+        // Strip trailing newlines that were added by the final \par
+        while (ssb.isNotEmpty() && ssb.last() == '\n')
+            ssb.delete(ssb.length - 1, ssb.length)
+
+        // ── Apply collected spans ─────────────────────────────────────────────
+        // Clamp end positions: the trailing-newline trim above may have shortened
+        // the SSB after SpanRun indices were recorded, making some end values
+        // point beyond the new length and causing setSpan to throw.
+        val X = Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        for ((s, eRaw, f) in runs) {
+            val e = eRaw.coerceAtMost(ssb.length)
+            if (s >= e) continue
+            // Bold and italic are separate StyleSpans so the toolbar can toggle
+            // each independently without needing to split BOLD_ITALIC spans.
+            if (f.bold)        ssb.setSpan(StyleSpan(Typeface.BOLD),   s, e, X)
+            if (f.italic)      ssb.setSpan(StyleSpan(Typeface.ITALIC), s, e, X)
+            if (f.underline)   ssb.setSpan(UnderlineSpan(),            s, e, X)
+            if (f.strike)      ssb.setSpan(StrikethroughSpan(),        s, e, X)
+            if (f.superscript) ssb.setSpan(SuperscriptSpan(),          s, e, X)
+            if (f.subscript)   ssb.setSpan(SubscriptSpan(),            s, e, X)
+            if (f.fontSize != 24)
+                ssb.setSpan(RelativeSizeSpan(f.fontSize / 24f),        s, e, X)
+            if (f.colorIndex > 0) {
+                val hex = colorTable.getOrElse(f.colorIndex - 1) { "" }
+                if (hex.isNotEmpty()) try {
+                    ssb.setSpan(ForegroundColorSpan(Color.parseColor(hex)), s, e, X)
+                } catch (_: Exception) {}
+            }
+            if (f.highlightIndex > 0) {
+                val hex = colorTable.getOrElse(f.highlightIndex - 1) { "" }
+                if (hex.isNotEmpty()) try {
+                    ssb.setSpan(BackgroundColorSpan(Color.parseColor(hex)), s, e, X)
+                } catch (_: Exception) {}
+            }
+        }
+
+        return ssb
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // RTF COLOUR TABLE
+    // ─────────────────────────────────────────────────────────────────────────
+
     private fun extractColorTable(src: String): List<String> {
         val colors = mutableListOf<String>()
-        // Find {\colortbl ...}
-        val start = src.indexOf("{\\colortbl")
+        var start = src.indexOf("{\\*\\colortbl")
+        if (start < 0) start = src.indexOf("{\\colortbl")
         if (start < 0) return colors
         var depth = 0
         val buf = StringBuilder()
@@ -724,11 +1032,7 @@ class RtfViewerFragment : Fragment() {
                 '{' -> { depth++; i++ }
                 '}' -> {
                     depth--; i++
-                    if (depth == 0) {
-                        // parse buf for \redN\greenN\blueN; entries
-                        parseColorEntries(buf.toString(), colors)
-                        break
-                    }
+                    if (depth == 0) { parseColorEntries(buf.toString(), colors); break }
                 }
                 else -> { if (depth > 0) buf.append(src[i]); i++ }
             }
@@ -737,66 +1041,170 @@ class RtfViewerFragment : Fragment() {
     }
 
     private fun parseColorEntries(colortblContent: String, out: MutableList<String>) {
-        // Each entry is separated by ';'. Each entry may have \redN\greenN\blueN.
-        // First entry (before first ';') may be empty → "auto" color.
-        val entries = colortblContent.split(';')
-        for (entry in entries) {
-            if (entry.isBlank()) {
-                // Empty entry = "auto" (default foreground/background) — omit
-                out.add("")
-                continue
-            }
-            val red   = Regex("\\\\red(\\d+)").find(entry)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val green = Regex("\\\\green(\\d+)").find(entry)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val blue  = Regex("\\\\blue(\\d+)").find(entry)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            out.add("#%02x%02x%02x".format(red, green, blue))
+        for (entry in colortblContent.split(';')) {
+            if (entry.isBlank()) { out.add(""); continue }
+            val r = Regex("\\\\red(\\d+)").find(entry)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val g = Regex("\\\\green(\\d+)").find(entry)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val b = Regex("\\\\blue(\\d+)").find(entry)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            out.add("#%02x%02x%02x".format(r, g, b))
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // RTF SERIALISER
-    // Converts plain text back into a minimal, spec-compliant RTF 1.9 document.
+    // SPANNABLE → RTF SERIALISER (save path)
+    //
+    // Walks all span transition points in the SpannableStringBuilder.  Between
+    // any two consecutive transition points, the set of active spans is constant
+    // by construction, so the formatting state changes only at boundaries.
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Serialises [text] into a minimal RTF 1.9 document.
+     * Serialises a [SpannableStringBuilder] into a spec-compliant RTF 1.9
+     * document string.
      *
-     * Non-ASCII characters are encoded as `\uN?` Unicode escapes.
-     * Newlines become `\par` breaks.  The result is 7-bit-clean ASCII.
+     * Supported spans → RTF control words:
+     * - [StyleSpan] (BOLD) → `\b … \b0`
+     * - [StyleSpan] (ITALIC) → `\i … \i0`
+     * - [UnderlineSpan] → `\ul … \ulnone`
+     * - [StrikethroughSpan] → `\strike … \strike0`
+     * - [SuperscriptSpan] → `\super … \nosupersub`
+     * - [SubscriptSpan] → `\sub … \nosupersub`
+     * - [RelativeSizeSpan] → `\fsN` (relative to 12 pt base = 24 half-points)
+     * - [ForegroundColorSpan] → `\cfN` with auto-built `\colortbl`
+     * - [BackgroundColorSpan] → `\highlightN` with auto-built `\colortbl`
+     *
+     * Newline characters in the SSB become `\par` paragraph breaks.
+     * Non-ASCII characters are emitted as `\uN?` Unicode escapes.
+     * The output is 7-bit-clean ASCII.
      */
-    private fun serializeToRtf(text: String): String {
-        val sb = StringBuilder()
-        sb.append("{\\rtf1\\ansi\\ansicpg1252\\deff0\r\n")
-        sb.append("{\\fonttbl{\\f0\\froman\\fcharset0 Times New Roman;}}\r\n")
-        sb.append("{\\colortbl ;\\red0\\green0\\blue0;}\r\n")
-        sb.append("\\f0\\fs24\\cf1\\pard\r\n")
+    private fun serializeSpannableToRtf(ssb: Editable): String {
+        val sb  = StringBuilder()
+        val len = ssb.length
 
-        for (line in text.lines()) {
-            for (ch in line) {
-                when {
-                    ch == '\\' -> sb.append("\\\\")
-                    ch == '{'  -> sb.append("\\{")
-                    ch == '}'  -> sb.append("\\}")
-                    ch.code < 128 -> sb.append(ch)
-                    else -> {
-                        // Unicode escape: \uN? where ? is the best-fit ASCII fallback.
-                        // Use '?' universally — we cannot transliterate arbitrary Unicode
-                        // to a single ASCII byte without a full mapping table.
-                        val code = ch.code
-                        sb.append("\\u$code?")
+        // ── 1. Collect all unique colours from FG / BG spans ─────────────────
+        val allColors = mutableListOf<Int>()
+        for (sp in ssb.getSpans(0, len, ForegroundColorSpan::class.java)) {
+            val c = sp.foregroundColor
+            if (c != 0 && c !in allColors) allColors.add(c)
+        }
+        for (sp in ssb.getSpans(0, len, BackgroundColorSpan::class.java)) {
+            val c = sp.backgroundColor
+            if (c != 0 && c !in allColors) allColors.add(c)
+        }
+        // Map Android Color int → 1-based RTF \colortbl index
+        val colorIdx: Map<Int, Int> = allColors.withIndex().associate { (i, c) -> c to (i + 1) }
+
+        // ── 2. RTF header ─────────────────────────────────────────────────────
+        sb.append("{\\rtf1\\ansi\\ansicpg1252\\deff0\r\n")
+        sb.append("{\\*\\fonttbl{\\f0\\froman\\fcharset0 Times New Roman;}}\r\n")
+        sb.append("{\\*\\colortbl ;")
+        for (c in allColors) {
+            sb.append("\\red${(c shr 16) and 0xFF}" +
+                      "\\green${(c shr 8) and 0xFF}" +
+                      "\\blue${c and 0xFF};")
+        }
+        sb.append("}\r\n")
+        sb.append("\\f0\\fs24\\pard\r\n")
+
+        if (len == 0) { sb.append("}"); return sb.toString() }
+
+        // ── 3. Collect all span transition points ─────────────────────────────
+        // Between any two consecutive points, the active span set is constant.
+        val transitions = sortedSetOf(0, len)
+        for (span in ssb.getSpans(0, len, Any::class.java)) {
+            val s = ssb.getSpanStart(span); val e = ssb.getSpanEnd(span)
+            if (s in 0..len) transitions.add(s)
+            if (e in 0..len) transitions.add(e)
+        }
+        val pts = transitions.toList()
+
+        // ── 4. Active formatting at a character position ──────────────────────
+        data class Fmt(
+            val bold: Boolean = false, val italic: Boolean = false,
+            val underline: Boolean = false, val strike: Boolean = false,
+            val superscript: Boolean = false, val subscript: Boolean = false,
+            val sizeHp: Int = 24,   // half-points
+            val fgColor: Int = 0, val bgColor: Int = 0
+        )
+
+        fun fmtAt(pos: Int): Fmt {
+            if (pos >= len) return Fmt()
+            val qe = (pos + 1).coerceAtMost(len)
+            var bold = false; var italic = false; var underline = false
+            var strike = false; var sup = false; var sub = false
+            var sizeHp = 24; var fg = 0; var bg = 0
+
+            for (sp in ssb.getSpans(pos, qe, Any::class.java)) {
+                // Confirm this span actually covers `pos` (avoids zero-length edge spans)
+                if (ssb.getSpanStart(sp) > pos || ssb.getSpanEnd(sp) <= pos) continue
+                when (sp) {
+                    is StyleSpan -> when (sp.style) {
+                        Typeface.BOLD      -> bold   = true
+                        Typeface.ITALIC    -> italic = true
+                        Typeface.BOLD_ITALIC -> { bold = true; italic = true }
                     }
+                    is UnderlineSpan      -> underline = true
+                    is StrikethroughSpan  -> strike    = true
+                    is SuperscriptSpan    -> sup       = true
+                    is SubscriptSpan      -> sub       = true
+                    is RelativeSizeSpan   -> sizeHp    = (sp.sizeChange * 24).toInt().coerceAtLeast(8)
+                    is ForegroundColorSpan -> fg       = sp.foregroundColor
+                    is BackgroundColorSpan -> bg       = sp.backgroundColor
                 }
             }
-            sb.append("\\par\r\n")
+            return Fmt(bold, italic, underline, strike, sup, sub, sizeHp, fg, bg)
         }
 
-        sb.append("}")
+        // ── 5. Walk segments, emit control-word deltas + text ─────────────────
+        var prev = Fmt()
+
+        for (idx in 0 until pts.size - 1) {
+            val segStart = pts[idx]
+            val segEnd   = pts[idx + 1].coerceAtMost(len)
+            if (segStart >= segEnd || segStart >= len) continue
+
+            val fmt = fmtAt(segStart)
+
+            // Emit only the control words that changed since the previous segment
+            if (fmt.bold        != prev.bold)        sb.append(if (fmt.bold)        "\\b "       else "\\b0 ")
+            if (fmt.italic      != prev.italic)      sb.append(if (fmt.italic)      "\\i "       else "\\i0 ")
+            if (fmt.underline   != prev.underline)   sb.append(if (fmt.underline)   "\\ul "      else "\\ulnone ")
+            if (fmt.strike      != prev.strike)      sb.append(if (fmt.strike)      "\\strike "  else "\\strike0 ")
+            if (fmt.superscript != prev.superscript) sb.append(if (fmt.superscript) "\\super "   else "\\nosupersub ")
+            if (fmt.subscript   != prev.subscript)   sb.append(if (fmt.subscript)   "\\sub "     else "\\nosupersub ")
+            if (fmt.sizeHp      != prev.sizeHp)      sb.append("\\fs${fmt.sizeHp} ")
+            if (fmt.fgColor     != prev.fgColor)     sb.append("\\cf${colorIdx[fmt.fgColor] ?: 0} ")
+            if (fmt.bgColor     != prev.bgColor)     sb.append("\\highlight${colorIdx[fmt.bgColor] ?: 0} ")
+
+            prev = fmt
+
+            // Emit characters for this segment
+            for (pos in segStart until segEnd) {
+                when (val ch = ssb[pos]) {
+                    '\n'       -> sb.append("\\par\r\n")
+                    '\\'       -> sb.append("\\\\")
+                    '{'        -> sb.append("\\{")
+                    '}'        -> sb.append("\\}")
+                    '\t'       -> sb.append("\\tab ")
+                    else       -> if (ch.code < 128) sb.append(ch)
+                                  else sb.append("\\u${ch.code}?")
+                }
+            }
+        }
+
+        // Close any still-open formatting and the document group
+        if (prev.bold)        sb.append("\\b0 ")
+        if (prev.italic)      sb.append("\\i0 ")
+        if (prev.underline)   sb.append("\\ulnone ")
+        if (prev.strike)      sb.append("\\strike0 ")
+        if (prev.superscript || prev.subscript) sb.append("\\nosupersub ")
+        sb.append("\\par\r\n}")   // terminal paragraph + close document group
+
         return sb.toString()
     }
 
     // ── HTML wrapper ──────────────────────────────────────────────────────────
 
-    /** Font sizes (px) for the four text-size steps: S / M / L / XL */
     private val TEXT_SIZES = listOf(12, 15, 18, 22)
 
     private fun wrapHtml(body: String): String = wrapHtml(body, TEXT_SIZES[textSizeStep])
@@ -809,18 +1217,18 @@ class RtfViewerFragment : Fragment() {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
           :root {
-            --bg:   #ffffff; --fg:   #1a1a1a; --muted:#555555;
+            --bg:#ffffff; --fg:#1a1a1a; --muted:#555555;
             --border:#cccccc; --code-bg:#f4f4f4;
             --blockquote-border:#4a90e2; --link:#1565c0;
-            --hr:   #dddddd; --h-color:#1a1a1a;
+            --hr:#dddddd; --h-color:#1a1a1a;
             --td-bg:#fafafa; --td-alt:#f0f0f0; --mark-bg:#fff9c4;
           }
           @media (prefers-color-scheme: dark) {
             :root {
-              --bg:   #1e1e1e; --fg:   #e0e0e0; --muted:#aaaaaa;
+              --bg:#1e1e1e; --fg:#e0e0e0; --muted:#aaaaaa;
               --border:#3a3a3a; --code-bg:#2d2d2d;
               --blockquote-border:#569cd6; --link:#4ec9b0;
-              --hr:   #3a3a3a; --h-color:#cccccc;
+              --hr:#3a3a3a; --h-color:#cccccc;
               --td-bg:#252525; --td-alt:#2a2a2a; --mark-bg:#3a3a00;
             }
           }
@@ -832,43 +1240,26 @@ class RtfViewerFragment : Fragment() {
             padding:20px 24px 48px; word-wrap:break-word;
             -webkit-text-size-adjust:100%;
           }
-          h1,h2,h3,h4,h5,h6 {
-            color:var(--h-color); font-weight:600;
-            margin:1.2em 0 0.5em; line-height:1.3;
-          }
+          h1,h2,h3,h4,h5,h6 { color:var(--h-color); font-weight:600; margin:1.2em 0 0.5em; line-height:1.3; }
           h1 { font-size:1.9em; border-bottom:2px solid var(--border); padding-bottom:6px; }
           h2 { font-size:1.5em; border-bottom:1px solid var(--border); padding-bottom:4px; }
-          h3 { font-size:1.25em; }
-          h4 { font-size:1.1em; }
-          h5 { font-size:1.0em; }
-          h6 { font-size:0.9em; color:var(--muted); }
+          h3 { font-size:1.25em; } h4 { font-size:1.1em; }
+          h5 { font-size:1.0em; } h6 { font-size:0.9em; color:var(--muted); }
           p  { margin:0.5em 0; }
           p.blank { margin:0.3em 0; min-height:0.6em; }
-          strong { font-weight:700; }
-          em     { font-style:italic; }
-          u      { text-decoration:underline; }
-          s      { text-decoration:line-through; }
-          sup    { vertical-align:super; font-size:0.75em; }
-          sub    { vertical-align:sub;   font-size:0.75em; }
-          mark   { background:var(--mark-bg); padding:0 2px; border-radius:2px; }
+          strong { font-weight:700; } em { font-style:italic; }
+          u { text-decoration:underline; } s { text-decoration:line-through; }
+          sup { vertical-align:super; font-size:0.75em; }
+          sub { vertical-align:sub;   font-size:0.75em; }
+          mark { background:var(--mark-bg); padding:0 2px; border-radius:2px; }
           a { color:var(--link); text-decoration:none; }
           a:hover { text-decoration:underline; }
-          table {
-            width:100%; border-collapse:collapse;
-            margin:1em 0; font-size:0.93em;
-          }
-          td, th {
-            border:1px solid var(--border);
-            padding:7px 12px; text-align:left;
-            vertical-align:top; background:var(--td-bg);
-          }
+          table { width:100%; border-collapse:collapse; margin:1em 0; font-size:0.93em; }
+          td,th { border:1px solid var(--border); padding:7px 12px; text-align:left;
+                  vertical-align:top; background:var(--td-bg); }
           tr:nth-child(even) td { background:var(--td-alt); }
-          hr {
-            border:none; border-top:1px solid var(--hr); margin:1.2em 0;
-          }
-          hr.page-break {
-            border-top:2px dashed var(--border); margin:2em 0;
-          }
+          hr { border:none; border-top:1px solid var(--hr); margin:1.2em 0; }
+          hr.page-break { border-top:2px dashed var(--border); margin:2em 0; }
         </style>
         </head>
         <body>$body</body>
@@ -894,7 +1285,8 @@ class RtfViewerFragment : Fragment() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }, "Share document"))
         } catch (e: Exception) {
-            Snackbar.make(binding.root, "Share failed: ${e.message}", Snackbar.LENGTH_LONG).show()
+            Snackbar.make(binding.root, "Share failed: ${e.message}",
+                Snackbar.LENGTH_LONG).show()
         }
     }
 }
