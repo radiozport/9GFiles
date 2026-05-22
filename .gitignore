@@ -1,11 +1,44 @@
-# Ignore a specific folder
+# Gradle
 .gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android Studio / IntelliJ
 .idea/
+*.iml
+*.ipr
+*.iws
+
+# Kotlin
 .kotlin/
 
-# Ignore multiple folders
-app/build/
+# Android build outputs
+**/build/
 app/release/
 
-# Ignore nested folder anywhere
-# **/temp/
+# Local configuration
+local.properties
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Crashlytics / Firebase (if used)
+crashlytics-build.properties
+firebase.json
+
+# NDK / CMake
+.cxx/
+.externalNativeBuild/
+
+# Logs
+*.log
+
+# Temporary folders
+**/temp/
+**/tmp/
