@@ -375,7 +375,17 @@ class HomeFragment : Fragment() {
         }
 
         externalVolumes.forEach { vol ->
-            val dir = vol.directory ?: return@forEach
+            // StorageVolume.getDirectory() was added in API 30.
+            // Use reflection to call the hidden getPath() on older devices.
+            val dir: File? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                vol.directory
+            } else {
+                try {
+                    val getPath = vol.javaClass.getMethod("getPath")
+                    (getPath.invoke(vol) as? String)?.let { File(it) }
+                } catch (_: Exception) { null }
+            }
+            if (dir == null) return@forEach
             val volPath = dir.absolutePath
             val rawLabel = vol.getDescription(requireContext())
 

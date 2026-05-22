@@ -5,10 +5,10 @@
 
 ![9G Files demo](https://raw.githubusercontent.com/rkarikari/9gfiles/main/images/9gfiles.gif)
 
-[![Version](https://img.shields.io/badge/Version-1.26-blue?style=for-the-badge)](#)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-brightgreen?style=for-the-badge&logo=android)](#)
+[![Version](https://img.shields.io/badge/Version-1.28-blue?style=for-the-badge)](#)
+[![Android](https://img.shields.io/badge/Android-10%2B-brightgreen?style=for-the-badge&logo=android)](#)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![API](https://img.shields.io/badge/API-26%2B-orange?style=for-the-badge)](#)
+[![API](https://img.shields.io/badge/API-29%2B-orange?style=for-the-badge)](#)
 
 *A powerful file manager that gives you complete control over everything on your phone — without the clutter, limits, or compromises of stock apps.*
 
@@ -321,14 +321,14 @@ Samsung My Files covers the basics reliably but is kept deliberately simple — 
 ┌─────────────────────────────────────────┐
 │           System Requirements           │
 ├─────────────────────────────────────────┤
-│  Minimum   Android 8.0 (Oreo, API 26)  │
+│  Minimum   Android 10 (Q, API 29)    │
 │  Target    Android 15 (API 35)          │
 │  Form      Phone and tablet             │
 │  Storage   SD card + USB OTG supported  │
 └─────────────────────────────────────────┘
 ```
 
-Works on any Android phone from 2017 onwards.
+Works on any Android phone from 2019 onwards (Android 10 / Q or newer).
 
 **First launch — storage permission:**
 When you open the app for the first time it will ask for storage access. On Android 11+ this opens a system settings page — tap "Allow" to grant access to all your files. Without it, the app can only see its own folder.
@@ -350,7 +350,7 @@ When you open the app for the first time it will ask for storage access. On Andr
 
 **9G Files** by RadioZport  
 Copyright © R.N.K 9G5AR RadioZport  
-Version 1.26  
+Version 1.28  
 Released under the [MIT License](LICENSE)
 
 ---
@@ -365,7 +365,7 @@ Android Studio Meerkat (2024.3.x) or newer
 JDK 17
 compileSdk  35  (Android 15)
 targetSdk   35
-minSdk      26  (Android 8.0 Oreo)
+minSdk      29  (Android 10 Q)
 ```
 
 ### Build Steps
@@ -379,7 +379,7 @@ minSdk      26  (Android 8.0 Oreo)
 | Permission | When required |
 |:---|:---|
 | `MANAGE_EXTERNAL_STORAGE` | Android 11+ — all-files access via Settings intent |
-| `READ_EXTERNAL_STORAGE` + `WRITE_EXTERNAL_STORAGE` | Android 9–10 |
+| `READ_EXTERNAL_STORAGE` + `WRITE_EXTERNAL_STORAGE` | Android 10 |
 | `READ_MEDIA_IMAGES/VIDEO/AUDIO` | Android 13+ granular media permissions |
 | `USE_BIOMETRIC` + `USE_FINGERPRINT` | App lock & Secure Vault |
 | `ACCESS_FINE_LOCATION` + `NEARBY_WIFI_DEVICES` | Wi-Fi Direct peer discovery |

@@ -2,17 +2,17 @@
 <resources>
     <!--
         Night-mode overrides for Theme.FileManagerPro.
-        The day theme sets windowLightStatusBar=true (dark icons for light backgrounds).
-        In dark mode we need the opposite: light icons on the dark surface background.
+        Status bar background is set programmatically in MainActivity.restoreStatusBar()
+        to colorSurface (pure black) so it matches the AppBarLayout exactly on all API levels.
+        On API 35+ edge-to-edge is forced and android:statusBarColor is ignored; on older
+        devices it acts as a pre-draw fallback.
+        Full-screen fragments hide the status bar entirely via
+        WindowInsetsController — this setting does not interfere with that.
     -->
     <style name="Theme.FileManagerPro" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Status bar -->
-        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@color/md_theme_surface</item>
         <item name="android:windowLightStatusBar">false</item>
 
-        <!-- Color attribute → night color mappings (must mirror values/themes.xml so that
-             values-night/colors.xml overrides are actually resolved instead of falling back
-             to the Material3 parent theme's built-in grey surfaces) -->
         <item name="colorPrimary">@color/md_theme_primary</item>
         <item name="colorOnPrimary">@color/md_theme_onPrimary</item>
         <item name="colorPrimaryContainer">@color/md_theme_primaryContainer</item>
@@ -32,9 +32,6 @@
         <item name="android:colorBackground">@color/md_theme_background</item>
         <item name="colorSurface">@color/md_theme_surface</item>
         <item name="colorOnSurface">@color/md_theme_onSurface</item>
-        <!-- FIX: maps colorSurfaceVariant to the night value (#0E0E0E) so the
-             Internal Storage card and Recent Files buttons get a black shade
-             instead of Material3's default grey -->
         <item name="colorSurfaceVariant">@color/md_theme_surfaceVariant</item>
         <item name="colorOnSurfaceVariant">@color/md_theme_onSurfaceVariant</item>
         <item name="colorOutline">@color/md_theme_outline</item>

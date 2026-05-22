@@ -11,10 +11,10 @@ android {
 
     defaultConfig {
         applicationId "com.radiozport.ninegfiles"
-        minSdk 26
+        minSdk 29
         targetSdk 35
-        versionCode 26
-        versionName "1.26"
+        versionCode 28
+        versionName "1.28"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables {

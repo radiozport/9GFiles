@@ -10,6 +10,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.os.bundleOf
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
@@ -474,20 +475,27 @@ class ImageViewerFragment : Fragment() {
     }
 
     private fun setupSystemUi() {
-        requireActivity().window.apply {
-            addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
-            decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            )
-        }
+        val window = requireActivity().window
 
-        // Apply window insets so overlays never collide with the system bars.
-        // The top overlay absorbs the status bar height; the bottom overlay absorbs
-        // the navigation bar height. Both keep their original padding on every other
-        // edge so icon spacing stays consistent regardless of device or nav mode.
+        // WindowCompat.setDecorFitsSystemWindows(false) is the modern edge-to-edge
+        // API: it draws content behind the status and navigation bars while keeping
+        // the WindowInsets dispatch pipeline intact.  The old FLAG_LAYOUT_NO_LIMITS
+        // bypassed that pipeline, so ViewCompat.setOnApplyWindowInsetsListener never
+        // received real inset values and the overlays bled into the system bars.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        )
+
+        // Pad the top overlay down by the status bar height, and the bottom overlay
+        // up by the navigation bar height, so controls are never hidden behind system
+        // bars.  Both listeners preserve their original padding on every other edge
+        // so icon spacing stays consistent regardless of device or nav mode.
         val origTopPad = binding.topOverlay.paddingTop
         val origBotPad = binding.bottomOverlay.paddingBottom
 
@@ -510,8 +518,9 @@ class ImageViewerFragment : Fragment() {
 
     override fun onDestroyView() {
         // Restore system UI
+        @Suppress("DEPRECATION")
         requireActivity().window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
-        requireActivity().window.clearFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        WindowCompat.setDecorFitsSystemWindows(requireActivity().window, true)
         CastMediaServer.stop()
         super.onDestroyView()
         _binding = null

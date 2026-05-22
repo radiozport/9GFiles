@@ -106,15 +106,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * The splash-screen window temporarily applies its own background color
-     * (windowSplashScreenBackground = md_theme_primary) which can leave the
-     * status bar in a darkened state.  Explicitly re-apply the correct icon
-     * tint for the current day/night mode so the status bar is always readable.
+     * Ensures the status bar background matches the AppBarLayout surface exactly.
+     *
+     * Problem: targeting API 35 forces edge-to-edge mode, making
+     * window.statusBarColor a no-op.  DrawerLayout (fitsSystemWindows=true)
+     * then draws its own coloured rectangle behind the status bar — defaulting
+     * to colorPrimary — which does NOT match the AppBarLayout's colorSurface.
+     *
+     * Fix: resolve colorSurface from the current theme (black in night, white
+     * in day) and pass it to DrawerLayout.setStatusBarBackgroundColor() so the
+     * region it paints matches the AppBar.  The window.statusBarColor call is
+     * kept as a harmless pre-API-35 fallback.
      */
     private fun restoreStatusBar() {
         val isNight = (resources.configuration.uiMode and
                 Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-        window.statusBarColor = android.graphics.Color.TRANSPARENT
+
+        // Resolve colorSurface from the active theme (night/day qualifier handled
+        // automatically by the resource system).
+        @androidx.annotation.ColorInt
+        val surfaceColor = resources.getColor(R.color.md_theme_surface, theme)
+
+        // On API 35+ the DrawerLayout background is what actually shows behind
+        // the status bar — align it with the AppBarLayout surface colour.
+        binding.drawerLayout.setStatusBarBackgroundColor(surfaceColor)
+
+        // Pre-API-35 fallback (ignored on API 35+ forced edge-to-edge).
+        window.statusBarColor = surfaceColor
+
         WindowInsetsControllerCompat(window, window.decorView)
             .isAppearanceLightStatusBars = !isNight   // dark icons in day, light icons in night
     }

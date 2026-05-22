@@ -124,7 +124,7 @@ class WifiDirectFragment : Fragment() {
 
                 WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
                     val networkInfo =
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                             intent.getParcelableExtra(WifiP2pManager.EXTRA_NETWORK_INFO, android.net.NetworkInfo::class.java)
                         else @Suppress("DEPRECATION")
                             intent.getParcelableExtra<android.net.NetworkInfo>(WifiP2pManager.EXTRA_NETWORK_INFO)

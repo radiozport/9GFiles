@@ -3,6 +3,8 @@ package com.radiozport.ninegfiles.workers
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.radiozport.ninegfiles.NineGFilesApp
@@ -90,22 +92,27 @@ class FileOperationService : Service() {
 
         val repo = (applicationContext as NineGFilesApp).fileRepository
 
-        startForeground(NOTIFICATION_ID, buildNotification("Preparing…", 0))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, buildNotification("Preparing…", 0),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification("Preparing…", 0))
+        }
 
         currentJob = serviceScope.launch {
             val result: OperationResult = when (intent.action) {
-                ACTION_COPY -> repo.copyFiles(files, destination) { progress ->
+                ACTION_COPY -> repo.copyFiles(files, destination, onProgress = { progress ->
                     if (progress is OperationResult.Progress) {
                         val pct = (progress.current * 100 / progress.total.coerceAtLeast(1))
                         updateNotification(buildProgressText("Copying", progress), pct)
                     }
-                }
-                ACTION_MOVE -> repo.moveFiles(files, destination) { progress ->
+                })
+                ACTION_MOVE -> repo.moveFiles(files, destination, onProgress = { progress ->
                     if (progress is OperationResult.Progress) {
                         val pct = (progress.current * 100 / progress.total.coerceAtLeast(1))
                         updateNotification(buildProgressText("Moving", progress), pct)
                     }
-                }
+                })
                 ACTION_DELETE -> repo.deleteFiles(files) { progress ->
                     if (progress is OperationResult.Progress) {
                         val pct = (progress.current * 100 / progress.total.coerceAtLeast(1))

@@ -49,6 +49,18 @@ class EpubReaderFragment : Fragment() {
 
         /** Zoom level applied / reversed by a double-tap (mirrors PdfZoomContainer). */
         private const val EPUB_DOUBLE_TAP_SCALE = 2.5f
+
+        /** Minimum fling velocity (px/s) required to trigger a chapter change on swipe. */
+        private const val EPUB_SWIPE_VELOCITY_MIN = 600f
+        /** Minimum horizontal travel (px) required to trigger a chapter change on swipe. */
+        private const val EPUB_SWIPE_DIST_MIN = 120f
+        /**
+         * Horizontal-dominance ratio: |dy| must be less than this fraction of |dx|
+         * for a fling to be treated as a horizontal swipe.  0.4 means horizontal
+         * travel must be at least ~2.5× the vertical travel — much stricter than a
+         * simple |dy| < |dx| check, preventing diagonal panning from flipping pages.
+         */
+        private const val EPUB_SWIPE_AXIS_RATIO = 0.4f
     }
 
     data class Chapter(val title: String, val entryName: String, val basePath: String)
@@ -98,6 +110,22 @@ class EpubReaderFragment : Fragment() {
      * fire, and suppresses the single-tap overlay toggle for that tap.
      */
     private var isHandlingDoubleTap = false
+
+    // ── Multi-touch / pinch-zoom guard ────────────────────────────────────
+    /**
+     * Set to true as soon as a second pointer touches the screen
+     * (ACTION_POINTER_DOWN).  Cleared after the last pointer lifts and a
+     * short cooldown expires so that any fling event that the GestureDetector
+     * emits from the remaining finger's movement is also blocked.
+     *
+     * While this flag is true [onFling] returns false immediately, preventing
+     * pinch-to-zoom and panning gestures from accidentally triggering a chapter
+     * change.
+     */
+    private var isMultiTouch        = false
+    private val multiTouchCooldownMs = 300L   // ignore flings for 300 ms after last finger lifts
+    private val swipeGestureHandler  = android.os.Handler(android.os.Looper.getMainLooper())
+    private val clearMultiTouchRunnable = Runnable { isMultiTouch = false }
 
     // ---------- lifecycle -----------------------------------------------
 
@@ -277,9 +305,78 @@ class EpubReaderFragment : Fragment() {
                         }
                         return true
                     }
+
+                    /**
+                     * Swipe left → next chapter; swipe right → previous chapter.
+                     *
+                     * Navigation is suppressed while zoomed in ([isEpubZoomed] == true)
+                     * so that the user can still pan horizontally through wide content
+                     * without accidentally flipping chapters.
+                     *
+                     * A fling is only accepted when:
+                     *  • it is clearly horizontal (|velocityX| > |velocityY|)
+                     *  • it covers at least [EPUB_SWIPE_DIST_MIN] px of horizontal travel
+                     *  • its horizontal speed exceeds [EPUB_SWIPE_VELOCITY_MIN] px/s
+                     *
+                     * When in full-screen mode the overlay auto-hide timer is reset so
+                     * the user can see the updated progress counter after swiping.
+                     */
+                    override fun onFling(
+                        e1: MotionEvent?, e2: MotionEvent,
+                        velocityX: Float, velocityY: Float
+                    ): Boolean {
+                        if (isEpubZoomed) return false            // let WebView pan instead
+                        if (isMultiTouch) return false            // pinch/pan gesture in progress
+                        if (e1 == null) return false
+
+                        val dx = e2.x - e1.x
+                        val dy = e2.y - e1.y
+
+                        // Reject weak or mostly-vertical gestures
+                        if (kotlin.math.abs(velocityX) < EPUB_SWIPE_VELOCITY_MIN) return false
+                        if (kotlin.math.abs(dx) < EPUB_SWIPE_DIST_MIN) return false
+                        // Require clearly horizontal motion: |dy| < EPUB_SWIPE_AXIS_RATIO * |dx|
+                        // (stricter than |dy| < |dx|; prevents diagonal panning from flipping pages)
+                        if (kotlin.math.abs(dy) > kotlin.math.abs(dx) * EPUB_SWIPE_AXIS_RATIO) return false
+
+                        return if (velocityX < 0) {
+                            // Swipe left → next chapter
+                            if (currentIdx < chapters.size - 1) {
+                                showChapter(currentIdx + 1)
+                                if (isFullScreen) rescheduleOverlayHide()
+                                true
+                            } else false
+                        } else {
+                            // Swipe right → previous chapter
+                            if (currentIdx > 0) {
+                                showChapter(currentIdx - 1)
+                                if (isFullScreen) rescheduleOverlayHide()
+                                true
+                            } else false
+                        }
+                    }
                 })
             @Suppress("ClickableViewAccessibility")
             setOnTouchListener { _, event ->
+                // ── Multi-touch guard ────────────────────────────────────────
+                // Track whether more than one pointer is (or was recently) on
+                // screen so that pinch-to-zoom and panning gestures cannot
+                // accidentally trigger a chapter change via onFling.
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_POINTER_DOWN -> {
+                        // Second (or further) finger touched: lock out swipe navigation.
+                        swipeGestureHandler.removeCallbacks(clearMultiTouchRunnable)
+                        isMultiTouch = true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        // All pointers lifted: clear the flag after a short cooldown so
+                        // any residual fling event emitted by the GestureDetector for the
+                        // last moving finger is still suppressed.
+                        swipeGestureHandler.removeCallbacks(clearMultiTouchRunnable)
+                        swipeGestureHandler.postDelayed(clearMultiTouchRunnable, multiTouchCooldownMs)
+                    }
+                }
+
                 // Snapshot the flag BEFORE feeding the event; onDoubleTap fires
                 // synchronously inside onTouchEvent and may flip the flag.
                 val wasHandlingDoubleTap = isHandlingDoubleTap
@@ -1048,6 +1145,7 @@ class EpubReaderFragment : Fragment() {
                 ?.supportActionBar?.show()
         }
         overlayHandler.removeCallbacks(overlayHideRunnable)
+        swipeGestureHandler.removeCallbacks(clearMultiTouchRunnable)
         chapterLoadJob?.cancel()
         webView.destroy()
         super.onDestroyView()

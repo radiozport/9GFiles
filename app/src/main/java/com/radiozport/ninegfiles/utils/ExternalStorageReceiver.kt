@@ -46,8 +46,12 @@ class ExternalStorageReceiver(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // ── API 29+ StorageVolumeCallback ─────────────────────────────────────
-    private val volumeCallback: Any? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    // NOTE: Must be lazy — if this were an eager val the anonymous class
+    // body would be loaded by the classloader at construction time even on
+    // pre-API-29 devices, triggering NoClassDefFoundError for
+    // StorageManager$StorageVolumeCallback (which doesn't exist before Q).
+    private val volumeCallback: Any? by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             @Suppress("NewApi")
             object : StorageManager.StorageVolumeCallback() {
                 override fun onStateChanged(volume: StorageVolume) {
@@ -56,6 +60,7 @@ class ExternalStorageReceiver(
                 }
             }
         } else null
+    }
 
     // ── BroadcastReceiver (API 21-28 fallback) ────────────────────────────
     override fun onReceive(context: Context, intent: Intent) {
@@ -66,7 +71,7 @@ class ExternalStorageReceiver(
     }
 
     fun register(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && volumeCallback != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && volumeCallback != null) {
             // Primary path: StorageVolumeCallback — immediate, no races
             @Suppress("NewApi")
             val sm = context.getSystemService(StorageManager::class.java)
@@ -103,7 +108,7 @@ class ExternalStorageReceiver(
     }
 
     fun unregister(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && volumeCallback != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && volumeCallback != null) {
             @Suppress("NewApi")
             val sm = context.getSystemService(StorageManager::class.java)
             @Suppress("NewApi")

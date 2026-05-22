@@ -131,7 +131,7 @@ class DualPaneFragment : Fragment() {
             viewLifecycleOwner.lifecycleScope.launch {
                 val repo = (requireActivity().application as NineGFilesApp).fileRepository
                 withContext(Dispatchers.IO) {
-                    repo.copyFiles(selected, destPath) {}
+                    repo.copyFiles(selected, destPath, onProgress = {})
                 }
                 dest.refresh()
                 Snackbar.make(

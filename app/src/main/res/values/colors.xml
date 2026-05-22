@@ -1,30 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Material3 Color Tokens (Light theme) -->
-    <color name="md_theme_primary">#1565C0</color>
+    <!-- Primary: deep slate-grey — professional, neutral, not blue -->
+    <color name="md_theme_primary">#37474F</color>
     <color name="md_theme_onPrimary">#FFFFFF</color>
-    <color name="md_theme_primaryContainer">#D6E4FF</color>
-    <color name="md_theme_onPrimaryContainer">#001945</color>
-    <color name="md_theme_secondary">#0077C2</color>
+    <color name="md_theme_primaryContainer">#ECEFF1</color>
+    <color name="md_theme_onPrimaryContainer">#1A1C1E</color>
+    <color name="md_theme_secondary">#546E7A</color>
     <color name="md_theme_onSecondary">#FFFFFF</color>
-    <color name="md_theme_secondaryContainer">#C9E6FF</color>
-    <color name="md_theme_onSecondaryContainer">#001E31</color>
-    <color name="md_theme_tertiary">#006874</color>
+    <color name="md_theme_secondaryContainer">#E8EAED</color>
+    <color name="md_theme_onSecondaryContainer">#1A1C1E</color>
+    <color name="md_theme_tertiary">#455A64</color>
     <color name="md_theme_onTertiary">#FFFFFF</color>
-    <color name="md_theme_tertiaryContainer">#97F0FF</color>
-    <color name="md_theme_onTertiaryContainer">#001F24</color>
+    <color name="md_theme_tertiaryContainer">#ECEFF1</color>
+    <color name="md_theme_onTertiaryContainer">#1A1C1E</color>
     <color name="md_theme_error">#BA1A1A</color>
     <color name="md_theme_onError">#FFFFFF</color>
     <color name="md_theme_errorContainer">#FFDAD6</color>
     <color name="md_theme_onErrorContainer">#410002</color>
-    <color name="md_theme_background">#FAFCFF</color>
-    <color name="md_theme_onBackground">#001B3E</color>
-    <color name="md_theme_surface">#FAFCFF</color>
-    <color name="md_theme_onSurface">#001B3E</color>
-    <color name="md_theme_surfaceVariant">#DFE2EB</color>
-    <color name="md_theme_onSurfaceVariant">#43474E</color>
-    <color name="md_theme_outline">#73777F</color>
-    <color name="md_theme_outlineVariant">#C3C6CF</color>
+    <!-- Surface / background: pure white -->
+    <color name="md_theme_background">#FFFFFF</color>
+    <color name="md_theme_onBackground">#1A1C1E</color>
+    <color name="md_theme_surface">#FFFFFF</color>
+    <color name="md_theme_onSurface">#1A1C1E</color>
+    <color name="md_theme_surfaceVariant">#EEEEEE</color>
+    <color name="md_theme_onSurfaceVariant">#44474E</color>
+    <color name="md_theme_outline">#74777F</color>
+    <color name="md_theme_outlineVariant">#C4C6CF</color>
 
     <!-- Semantic -->
     <color name="on_surface_medium">#66000000</color>

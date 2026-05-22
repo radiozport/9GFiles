@@ -1,6 +1,7 @@
 package com.radiozport.ninegfiles.data.repository
 
 import android.content.Context
+import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.os.storage.StorageManager
@@ -34,10 +35,21 @@ class FileRepository(
         ))
         val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
         storageManager.storageVolumes.filter { it.isRemovable && it.state == Environment.MEDIA_MOUNTED }.forEach { vol ->
-            vol.directory?.let { dir ->
-                val extStat = StatFs(dir.absolutePath)
+            // StorageVolume.getDirectory() (= vol.directory) was added in API 30.
+            // On older devices calling it throws NoSuchMethodError at runtime.
+            // Fall back to the hidden getPath() method via reflection for API < 30.
+            val dir: File? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                vol.directory
+            } else {
+                try {
+                    val getPath = vol.javaClass.getMethod("getPath")
+                    (getPath.invoke(vol) as? String)?.let { File(it) }
+                } catch (_: Exception) { null }
+            }
+            dir?.let { d ->
+                val extStat = StatFs(d.absolutePath)
                 storages.add(StorageInfo(
-                    label = vol.getDescription(context), path = dir.absolutePath,
+                    label = vol.getDescription(context), path = d.absolutePath,
                     totalSpace = extStat.totalBytes, freeSpace = extStat.availableBytes, isRemovable = true
                 ))
             }
@@ -153,12 +165,21 @@ class FileRepository(
 
     // ─── File Operations ──────────────────────────────────────────────────────
 
-    suspend fun copyFiles(sources: List<FileItem>, destination: String, onProgress: (OperationResult) -> Unit): OperationResult = withContext(Dispatchers.IO) {
+    suspend fun copyFiles(
+        sources: List<FileItem>,
+        destination: String,
+        onProgress: (OperationResult) -> Unit,
+        onConflict: suspend (existing: FileItem, incoming: FileItem) -> ConflictResolution =
+            { _, _ -> ConflictResolution.KEEP_BOTH }
+    ): OperationResult = withContext(Dispatchers.IO) {
         // Pre-calculate grand total bytes so we can show meaningful overall progress.
         val totalBytes = sources.sumOf { if (it.isDirectory) getFolderSize(it.path) else it.size }
         var bytesTransferred = 0L
         val startTime = System.currentTimeMillis()
         var successCount = 0
+        // Tracks a REPLACE_ALL or SKIP_ALL answer so subsequent conflicts in the
+        // same batch are resolved automatically without further prompting.
+        var batchResolution: ConflictResolution? = null
 
         sources.forEachIndexed { index, source ->
             onProgress(OperationResult.Progress(
@@ -168,7 +189,41 @@ class FileRepository(
                 speedBytesPerSec = calcSpeed(bytesTransferred, startTime)
             ))
             try {
-                val destFile = File(destination, source.name)
+                val proposed = File(destination, source.name)
+
+                // ── Conflict resolution ───────────────────────────────────────
+                // Three distinct cases:
+                //  (a) Same canonical path → always auto-rename to avoid self-truncation.
+                //  (b) Different folder, name already exists → ask (or apply batchResolution).
+                //  (c) No collision → use the proposed path as-is.
+                val destFile: File = when {
+                    proposed.canonicalPath == source.file.canonicalPath -> {
+                        // (a) Pasting into the same folder: auto-rename, never overwrite self.
+                        generateCopyDestination(source.file, proposed.parentFile ?: File(destination))
+                    }
+                    proposed.exists() -> {
+                        // (b) Name collision in destination folder.
+                        val resolution = batchResolution ?: onConflict(
+                            FileItem.fromFile(proposed, 0),
+                            source
+                        ).also { res ->
+                            if (res == ConflictResolution.REPLACE_ALL ||
+                                res == ConflictResolution.SKIP_ALL) {
+                                batchResolution = res
+                            }
+                        }
+                        when (resolution) {
+                            ConflictResolution.REPLACE,
+                            ConflictResolution.REPLACE_ALL -> proposed          // overwrite
+                            ConflictResolution.KEEP_BOTH  -> generateCopyDestination(
+                                source.file, File(destination))                 // auto-rename
+                            ConflictResolution.SKIP,
+                            ConflictResolution.SKIP_ALL   -> return@forEachIndexed // skip
+                        }
+                    }
+                    else -> proposed                                             // (c) no conflict
+                }
+
                 if (source.isDirectory) {
                     copyDirectory(source.file, destFile) { delta ->
                         bytesTransferred += delta
@@ -198,13 +253,20 @@ class FileRepository(
         OperationResult.Success("Copied $successCount item(s) successfully", successCount)
     }
 
-    suspend fun moveFiles(sources: List<FileItem>, destination: String, onProgress: (OperationResult) -> Unit): OperationResult = withContext(Dispatchers.IO) {
+    suspend fun moveFiles(
+        sources: List<FileItem>,
+        destination: String,
+        onProgress: (OperationResult) -> Unit,
+        onConflict: suspend (existing: FileItem, incoming: FileItem) -> ConflictResolution =
+            { _, _ -> ConflictResolution.KEEP_BOTH }
+    ): OperationResult = withContext(Dispatchers.IO) {
         // Pre-calculate total bytes for cross-device moves (USB / SD card).
         // For same-device renames this stays at 0 — progress is per-file.
         val totalBytes = sources.sumOf { if (it.isDirectory) getFolderSize(it.path) else it.size }
         var bytesTransferred = 0L
         val startTime = System.currentTimeMillis()
         var successCount = 0
+        var batchResolution: ConflictResolution? = null
 
         sources.forEachIndexed { index, source ->
             onProgress(OperationResult.Progress(
@@ -214,7 +276,35 @@ class FileRepository(
                 speedBytesPerSec = calcSpeed(bytesTransferred, startTime)
             ))
             try {
-                val destFile = File(destination, source.name)
+                val proposed = File(destination, source.name)
+
+                // ── Conflict resolution ───────────────────────────────────────
+                val destFile: File = if (proposed.exists() &&
+                        proposed.canonicalPath != source.file.canonicalPath) {
+                    val resolution = batchResolution ?: onConflict(
+                        FileItem.fromFile(proposed, 0),
+                        source
+                    ).also { res ->
+                        if (res == ConflictResolution.REPLACE_ALL ||
+                            res == ConflictResolution.SKIP_ALL) {
+                            batchResolution = res
+                        }
+                    }
+                    when (resolution) {
+                        ConflictResolution.REPLACE,
+                        ConflictResolution.REPLACE_ALL -> {
+                            // Delete the existing entry before renaming/copying over it.
+                            proposed.deleteRecursively()
+                            proposed
+                        }
+                        ConflictResolution.KEEP_BOTH   -> generateUniqueDestination(source.file, File(destination))
+                        ConflictResolution.SKIP,
+                        ConflictResolution.SKIP_ALL    -> return@forEachIndexed
+                    }
+                } else {
+                    proposed
+                }
+
                 if (!source.file.renameTo(destFile)) {
                     // renameTo failed — cross-device move (e.g. internal → USB / SD card).
                     // Fall back to copy-then-delete with full byte-level progress.
@@ -695,6 +785,47 @@ class FileRepository(
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * Return a [File] in [destDir] whose name does not collide with any existing
+     * entry.  The sequence tried is:
+     *   "name (copy).ext"
+     *   "name (copy 2).ext"
+     *   "name (copy 3).ext"  …
+     *
+     * Used when the user pastes a file/directory into the folder it was copied
+     * from so that the destination never equals the source.
+     */
+    private fun generateCopyDestination(source: File, destDir: File): File {
+        val baseName = source.nameWithoutExtension
+        val ext = source.extension.let { if (it.isEmpty()) "" else ".$it" }
+        var candidate = File(destDir, "$baseName (copy)$ext")
+        var counter = 2
+        while (candidate.exists()) {
+            candidate = File(destDir, "$baseName (copy $counter)$ext")
+            counter++
+        }
+        return candidate
+    }
+
+    /**
+     * Return a [File] in [destDir] whose name does not collide with any existing
+     * entry, without appending "(copy)".  Used for move conflicts so the
+     * renamed result doesn't look like a copy:
+     *   "name (2).ext"
+     *   "name (3).ext"  …
+     */
+    private fun generateUniqueDestination(source: File, destDir: File): File {
+        val baseName = source.nameWithoutExtension
+        val ext = source.extension.let { if (it.isEmpty()) "" else ".$it" }
+        var counter = 2
+        var candidate = File(destDir, "$baseName ($counter)$ext")
+        while (candidate.exists()) {
+            counter++
+            candidate = File(destDir, "$baseName ($counter)$ext")
+        }
+        return candidate
+    }
 
     /**
      * Copy a single file, invoking [onDelta] with the number of bytes written

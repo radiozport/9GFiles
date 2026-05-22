@@ -13,6 +13,7 @@ import com.radiozport.ninegfiles.data.preferences.AppPreferences
 import com.radiozport.ninegfiles.data.repository.*
 import com.radiozport.ninegfiles.data.repository.BatchRenameTemplate
 import com.radiozport.ninegfiles.utils.FileClipboardManager
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -107,6 +108,44 @@ class FileExplorerViewModel(application: Application) : AndroidViewModel(applica
     val operationResult: SharedFlow<OperationResult> = _operationResult
     private val _operationProgress = MutableStateFlow<OperationResult.Progress?>(null)
     val operationProgress: StateFlow<OperationResult.Progress?> = _operationProgress
+
+    // ─── Conflict Resolution ──────────────────────────────────────────────
+    /**
+     * Emitted when a copy/move encounters a file that already exists at the
+     * destination.  The Fragment observes this and shows a conflict dialog;
+     * the user's choice is delivered back via [resolveConflict].
+     */
+    data class ConflictRequest(val existing: FileItem, val incoming: FileItem)
+
+    private val _conflictRequest = MutableSharedFlow<ConflictRequest>()
+    val conflictRequest: SharedFlow<ConflictRequest> = _conflictRequest
+
+    /** Holds the deferred that is awaiting the user's conflict resolution. */
+    internal var pendingConflict: CompletableDeferred<ConflictResolution>? = null
+
+    /**
+     * Called by the Fragment after the user picks Replace / Skip / Keep Both
+     * (or their "apply to all" variants) in the conflict dialog.
+     */
+    fun resolveConflict(resolution: ConflictResolution) {
+        pendingConflict?.complete(resolution)
+        pendingConflict = null
+    }
+
+    /**
+     * Suspends the calling coroutine until the user resolves the conflict,
+     * then returns the chosen [ConflictResolution].  Emits a [ConflictRequest]
+     * to [conflictRequest] so the Fragment can react.
+     */
+    private suspend fun awaitConflictResolution(
+        existing: FileItem,
+        incoming: FileItem
+    ): ConflictResolution {
+        val deferred = CompletableDeferred<ConflictResolution>()
+        pendingConflict = deferred
+        _conflictRequest.emit(ConflictRequest(existing, incoming))
+        return deferred.await()
+    }
 
     /** Tracks the currently running file-operation job so the UI can cancel it. */
     private var currentOperationJob: kotlinx.coroutines.Job? = null
@@ -354,12 +393,18 @@ class FileExplorerViewModel(application: Application) : AndroidViewModel(applica
 
         launchOperation {
             if (isCut) {
-                val result = repo.moveFiles(items, dest) { _operationProgress.value = it as? OperationResult.Progress }
+                val result = repo.moveFiles(items, dest,
+                    onProgress = { _operationProgress.value = it as? OperationResult.Progress },
+                    onConflict = { existing, incoming -> awaitConflictResolution(existing, incoming) }
+                )
                 _operationResult.emit(result)
                 // For a move, also clear when keepPasteBar is on (move is destructive — no re-paste)
                 if (keepPasteBar.value) FileClipboardManager.clear()
             } else {
-                val result = repo.copyFiles(items, dest) { _operationProgress.value = it as? OperationResult.Progress }
+                val result = repo.copyFiles(items, dest,
+                    onProgress = { _operationProgress.value = it as? OperationResult.Progress },
+                    onConflict = { existing, incoming -> awaitConflictResolution(existing, incoming) }
+                )
                 _operationResult.emit(result)
             }
             _operationProgress.value = null

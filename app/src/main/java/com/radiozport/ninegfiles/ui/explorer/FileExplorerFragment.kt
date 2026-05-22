@@ -384,6 +384,11 @@ class FileExplorerFragment : Fragment() {
                     }
                 }
                 launch {
+                    viewModel.conflictRequest.collectLatest { req ->
+                        showConflictDialog(req)
+                    }
+                }
+                launch {
                     viewModel.canGoBack.collectLatest { canGo ->
                         binding.btnNavBack?.isEnabled = canGo
                         binding.btnNavBack?.alpha = if (canGo) 1.0f else 0.38f
@@ -852,4 +857,102 @@ class FileExplorerFragment : Fragment() {
         secs < 3600 -> "${secs / 60}:${(secs % 60).toString().padStart(2, '0')}"
         else        -> "${secs / 3600}h ${(secs % 3600) / 60}m"
     }
+
+    // ─── Conflict resolution dialog ───────────────────────────────────────
+
+    /**
+     * Shows a Material dialog giving the user four choices when a file with
+     * the same name already exists at the paste destination:
+     *
+     *  • Replace       – overwrite just this file
+     *  • Replace All   – overwrite this and all remaining conflicts in the batch
+     *  • Keep Both     – auto-rename this file (appends "(copy)" / counter)
+     *  • Skip          – leave the existing file untouched, skip this one
+     *
+     * The result is forwarded to the ViewModel, which unblocks the suspended
+     * copy/move coroutine.
+     */
+    private fun showConflictDialog(req: FileExplorerViewModel.ConflictRequest) {
+        if (!isAdded) {
+            viewModel.resolveConflict(ConflictResolution.SKIP)
+            return
+        }
+        val existingSize = android.text.format.Formatter
+            .formatShortFileSize(requireContext(), req.existing.size)
+        val existingDate = java.text.SimpleDateFormat("d MMM yyyy, HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(req.existing.lastModified))
+        val incomingSize = android.text.format.Formatter
+            .formatShortFileSize(requireContext(), req.incoming.size)
+        val incomingDate = java.text.SimpleDateFormat("d MMM yyyy, HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(req.incoming.lastModified))
+
+        val message =
+            "\"${req.existing.name}\" already exists in this folder.\n\n" +
+            "Existing:  $existingSize  ·  $existingDate\n" +
+            "Incoming:  $incomingSize  ·  $incomingDate"
+
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("File already exists")
+            .setMessage(message)
+            .setCancelable(false)
+            .setPositiveButton("Replace") { _, _ ->
+                viewModel.resolveConflict(ConflictResolution.REPLACE)
+            }
+            .setNeutralButton("Keep Both") { _, _ ->
+                viewModel.resolveConflict(ConflictResolution.KEEP_BOTH)
+            }
+            .setNegativeButton("Skip") { _, _ ->
+                viewModel.resolveConflict(ConflictResolution.SKIP)
+            }
+            .setOnDismissListener {
+                // Safety net: if the dialog is dismissed without a button press
+                // (e.g. system back), treat it as Skip so the operation unblocks.
+                if (viewModel.pendingConflict != null) {
+                    viewModel.resolveConflict(ConflictResolution.SKIP)
+                }
+            }
+            // "Apply to all" options live in a three-item additional button row
+            // via a custom view appended below the message.
+            .also { builder ->
+                val applyAllView = layoutInflater.inflate(
+                    android.R.layout.select_dialog_item, null, false
+                )
+                // We simulate "Replace All / Skip All" via a secondary chip group
+                // built programmatically so we don't need a new layout XML.
+                val chipGroup = com.google.android.material.chip.ChipGroup(requireContext()).apply {
+                    isSingleSelection = true
+                    isSelectionRequired = false
+                    val dp24 = (24 * resources.displayMetrics.density + 0.5f).toInt()
+                    val dp16 = (16 * resources.displayMetrics.density + 0.5f).toInt()
+                    setPadding(dp24, 0, dp24, dp16)
+                    addView(com.google.android.material.chip.Chip(context).apply {
+                        text = "Replace all remaining"
+                        isCheckable = true
+                        tag = ConflictResolution.REPLACE_ALL
+                    })
+                    addView(com.google.android.material.chip.Chip(context).apply {
+                        text = "Skip all remaining"
+                        isCheckable = true
+                        tag = ConflictResolution.SKIP_ALL
+                    })
+                    setOnCheckedStateChangeListener { group, _ ->
+                        val selected = group.checkedChipId
+                        if (selected == com.google.android.material.chip.ChipGroup.NO_ID) return@setOnCheckedStateChangeListener
+                        val chip = group.findViewById<com.google.android.material.chip.Chip>(selected)
+                        val resolution = chip.tag as? ConflictResolution ?: return@setOnCheckedStateChangeListener
+                        viewModel.resolveConflict(resolution)
+                        // Dismiss whatever dialog is showing
+                        (context as? android.app.Activity)
+                            ?.let { activity ->
+                                (activity.window?.decorView
+                                    ?.findViewWithTag<android.view.View>("conflict_dialog"))
+                            } // fallback: the dialog's own dismiss is handled via resolveConflict
+                    }
+                }
+                builder.setView(chipGroup)
+            }
+            .show()
+            .also { dialog -> dialog.window?.decorView?.tag = "conflict_dialog" }
+    }
 }
+

@@ -141,9 +141,12 @@ class RtfViewerFragment : Fragment() {
         decorateToolbarButtonLabels()
         setupButtonListeners()
 
+        // RTF editor disabled — table editing is not yet supported.
+        binding.btnEdit.isVisible = false
+        binding.btnEdit.isEnabled = false
+
         if (file.name.endsWith(".9genc", ignoreCase = true)) {
-            binding.btnEdit.isEnabled = false
-            binding.btnEdit.alpha = 0.4f
+            // btnEdit is already hidden above; nothing extra needed for encrypted files.
         }
 
         loadDocument(file)
@@ -615,15 +618,33 @@ class RtfViewerFragment : Fragment() {
         val paraHtml  = StringBuilder()
         val paraPlain = StringBuilder()
 
-        var inTable   = false
-        var tableHtml = StringBuilder()
+        var inTable           = false
+        // \pard resets RTF's "in-table" state; \intbl (always present in cell
+        // paragraphs as \pard\intbl) re-asserts it.  We use a deferred flag rather
+        // than closing the table immediately on \pard, because every cell starts
+        // with \pard\intbl — we must wait to see whether \intbl follows.
+        var pendingTableClose = false
+        var tableHtml         = StringBuilder()
 
         var i = 0
         val len = src.length
 
         fun cur(): FmtState = stack.last()
 
+        // Flush a completed table to the main html stream at its correct position.
+        // Called whenever we know the current paragraph is outside any table
+        // (i.e. \pard was seen and \intbl did NOT follow before content/\par).
+        fun closeTableIfPending() {
+            if (!pendingTableClose) return
+            tableHtml.append("</table>\n")
+            html.append(tableHtml)
+            tableHtml         = StringBuilder()
+            inTable           = false
+            pendingTableClose = false
+        }
+
         fun flushParagraph(forceBlank: Boolean = false) {
+            closeTableIfPending()
             if (inTable) { tableHtml.append(paraHtml); paraHtml.clear(); paraPlain.append('\n'); return }
             val content = paraHtml.toString()
             if (content.isNotEmpty()) {
@@ -674,6 +695,7 @@ class RtfViewerFragment : Fragment() {
 
         fun appendText(raw: String) {
             if (cur().isSkip) return
+            closeTableIfPending()
             val escaped = raw.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
             paraHtml.append(applyFormatting(escaped))
             paraPlain.append(raw)
@@ -729,7 +751,16 @@ class RtfViewerFragment : Fragment() {
                                     inTable, tableHtml, colorTable)
 
                                 when (word) {
+                                    "pard"  -> {
+                                        // \pard tentatively exits table mode; \intbl will
+                                        // cancel this if the paragraph is still a table cell.
+                                        if (inTable) pendingTableClose = true
+                                    }
                                     "trowd" -> {
+                                        // A new row definition may start a brand-new table
+                                        // immediately after a previous one ended (bug: two
+                                        // tables would merge without this flush).
+                                        closeTableIfPending()
                                         if (!inTable) { inTable = true; tableHtml = StringBuilder("<table>\n") }
                                         tableHtml.append("<tr>")
                                     }
@@ -738,7 +769,12 @@ class RtfViewerFragment : Fragment() {
                                         val ct = paraHtml.toString(); paraHtml.clear(); paraPlain.clear()
                                         tableHtml.append("<td>$ct</td>")
                                     }
-                                    "intbl" -> inTable = true
+                                    "intbl" -> {
+                                        // Cancels a pending table-close: this paragraph IS
+                                        // still a table cell (\pard\intbl pattern).
+                                        pendingTableClose = false
+                                        inTable = true
+                                    }
                                 }
                             }
                         }
@@ -870,6 +906,33 @@ class RtfViewerFragment : Fragment() {
 
         val colorTable = extractColorTable(src)
 
+        // ── Table-preservation tracking ───────────────────────────────────────
+        // Tables cannot be represented in a plain EditText, so instead of
+        // bleeding cell text into the editable SSB we:
+        //   1. Suppress all content that belongs to a table from emit().
+        //   2. Insert a single '\uE000' placeholder character at each table site.
+        //   3. Attach a TablePlaceholderSpan to that char carrying the verbatim
+        //      RTF source of the table (from \trowd to the end of the last \row).
+        // serializeSpannableToRtf recognises these spans and re-emits the raw
+        // RTF on save, so tables survive a round-trip through the editor.
+        var tableInParse      = false          // currently inside a table block
+        var tableStartSrcIdx  = -1             // src index of '\'  before \trowd
+        var lastRowEndSrcIdx  = -1             // src index after last \row (incl. trailing space)
+        var pendingTableClose = false          // \pard seen in table; waiting to see \intbl
+
+        fun flushTablePlaceholder() {
+            if ((!tableInParse && !pendingTableClose) || lastRowEndSrcIdx < 0) return
+            val rawRtf = src.substring(tableStartSrcIdx, lastRowEndSrcIdx)
+            val pos = ssb.length
+            ssb.append('\uE000')
+            ssb.setSpan(TablePlaceholderSpan(rawRtf),
+                pos, pos + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            tableInParse      = false
+            pendingTableClose = false
+            tableStartSrcIdx  = -1
+            lastRowEndSrcIdx  = -1
+        }
+
         // SpanRun: a character range + the FmtState snapshot active during it.
         // All spans are applied in one pass at the end so we avoid O(n²) setSpan
         // calls interleaved with text appends.
@@ -892,6 +955,13 @@ class RtfViewerFragment : Fragment() {
 
         fun emit(raw: String) {
             if (cur().isSkip || raw.isEmpty()) return
+            // If a \pard was seen inside a table but \intbl hasn't confirmed
+            // it's still a table cell, any non-suppressed emit means we've left
+            // the table → flush the placeholder first.
+            if (pendingTableClose) flushTablePlaceholder()
+            // While we are confirmed to be inside a table, suppress all content
+            // from the editable SSB; it will be preserved verbatim via rawRtf.
+            if (tableInParse) return
             val start = ssb.length
             ssb.append(raw)
             val curFmt = cur()
@@ -967,6 +1037,45 @@ class RtfViewerFragment : Fragment() {
                                 // Delegate to shared state updater; emit any returned text
                                 val content = applyFmtState(word, num, ::cur)
                                 if (content != null) emit(content)
+
+                                // ── Table-structure control words ─────────────────────────────
+                                // applyFmtState ignores these; handle them here to track table
+                                // boundaries and build the TablePlaceholderSpan payload.
+                                when (word) {
+                                    "trowd" -> {
+                                        // A \trowd may follow immediately after a \row from the
+                                        // *same* table (next row) or start a brand-new table.
+                                        // flushTablePlaceholder() is a no-op when pendingTableClose
+                                        // is false, so adjacent tables are handled correctly.
+                                        flushTablePlaceholder()
+                                        if (!tableInParse) {
+                                            // backslashPos = wordStart - 1 (the '\' character)
+                                            tableStartSrcIdx = wordStart - 1
+                                            tableInParse     = true
+                                        }
+                                    }
+                                    "row" -> {
+                                        // End of one row; record end position so the raw RTF
+                                        // captured up to here (inclusive) is complete when the
+                                        // table is later flushed.  Do NOT set pendingTableClose
+                                        // here — the table may continue with more rows.  It is
+                                        // \pard (without a following \intbl) that signals the
+                                        // table has truly ended.
+                                        lastRowEndSrcIdx = i
+                                    }
+                                    "intbl" -> {
+                                        // This paragraph IS a table cell → cancel any tentative
+                                        // table-close that was set by a preceding \pard.
+                                        pendingTableClose = false
+                                        tableInParse      = true
+                                    }
+                                    "pard" -> {
+                                        // \pard resets the "in-table" hint.  If we were in a
+                                        // table the close is now pending until we see \intbl or
+                                        // non-table content.
+                                        if (tableInParse) pendingTableClose = true
+                                    }
+                                }
                             }
                         }
                     }
@@ -975,6 +1084,9 @@ class RtfViewerFragment : Fragment() {
                 else -> { if (!cur().isSkip) emit(src[i].toString()); i++ }
             }
         }
+
+        // Flush any table that was open at end-of-document (no trailing \pard).
+        if (tableInParse || pendingTableClose) flushTablePlaceholder()
 
         // Strip trailing newlines that were added by the final \par
         while (ssb.isNotEmpty() && ssb.last() == '\n')
@@ -1049,6 +1161,21 @@ class RtfViewerFragment : Fragment() {
             out.add("#%02x%02x%02x".format(r, g, b))
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TABLE PLACEHOLDER SPAN
+    //
+    // Inserted into the SpannableStringBuilder (as a single \uE000 character)
+    // by parseRtfToSpannable to represent an RTF table block whose structure
+    // cannot be expressed in a plain EditText.  The span carries the verbatim
+    // RTF source of the table so that serializeSpannableToRtf can re-emit it
+    // unchanged on save, preserving every \trowd / \cell / \row / \cellx
+    // control word that the edit-mode EditText would otherwise lose.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Opaque marker attached to the single '\uE000' placeholder character that
+     *  represents a complete RTF table block inside the editable SSB. */
+    private class TablePlaceholderSpan(val rawRtf: String)
 
     // ─────────────────────────────────────────────────────────────────────────
     // SPANNABLE → RTF SERIALISER (save path)
@@ -1162,6 +1289,34 @@ class RtfViewerFragment : Fragment() {
             val segStart = pts[idx]
             val segEnd   = pts[idx + 1].coerceAtMost(len)
             if (segStart >= segEnd || segStart >= len) continue
+
+            // ── Table placeholder fast-path ───────────────────────────────────
+            // If this segment is a single '\uE000' char that carries a
+            // TablePlaceholderSpan, emit the verbatim RTF table block instead of
+            // trying to serialise the placeholder character as text.  Close any
+            // open formatting spans first so the RTF context is clean.
+            if (ssb[segStart] == '\uE000') {
+                val tbl = ssb.getSpans(segStart, segStart + 1, TablePlaceholderSpan::class.java)
+                    .firstOrNull { ssb.getSpanStart(it) == segStart }
+                if (tbl != null) {
+                    // Reset any active character formatting before the table.
+                    if (prev.bold)                         sb.append("\\b0 ")
+                    if (prev.italic)                       sb.append("\\i0 ")
+                    if (prev.underline)                    sb.append("\\ulnone ")
+                    if (prev.strike)                       sb.append("\\strike0 ")
+                    if (prev.superscript || prev.subscript) sb.append("\\nosupersub ")
+                    if (prev.fgColor != 0)                 sb.append("\\cf0 ")
+                    if (prev.bgColor != 0)                 sb.append("\\highlight0 ")
+                    // Close the current paragraph, emit the raw table RTF, then
+                    // reset `prev` so formatting deltas are recalculated correctly
+                    // for content that follows the table.
+                    sb.append("\\par\r\n")
+                    sb.append(tbl.rawRtf)
+                    sb.append("\r\n")
+                    prev = Fmt()
+                    continue
+                }
+            }
 
             val fmt = fmtAt(segStart)
 
